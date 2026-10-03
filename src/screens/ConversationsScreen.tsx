@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useIsFocused } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { FlatList, StyleSheet, View } from 'react-native';
 import { Button, Dialog, Divider, FAB, Portal, Text, useTheme } from 'react-native-paper';
@@ -12,6 +12,7 @@ import { Conversation, GENERAL_CONVERSATION_ID } from '../store/types';
 
 export default function ConversationsScreen() {
   const theme = useTheme();
+  const isFocused = useIsFocused();
   const conversations = useChatStore((s) => s.conversations);
   const nodes = useMeshStore((s) => s.nodes);
   const [fabOpen, setFabOpen] = useState(false);
@@ -54,8 +55,8 @@ export default function ConversationsScreen() {
 
       <Portal>
         <FAB.Group
-          open={fabOpen}
-          visible
+          open={fabOpen && isFocused}
+          visible={isFocused}
           icon={fabOpen ? 'close' : 'message-plus'}
           onStateChange={({ open: o }) => setFabOpen(o)}
           actions={[

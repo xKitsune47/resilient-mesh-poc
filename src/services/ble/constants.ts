@@ -26,16 +26,16 @@ export const MAX_TOTAL_LINKS = 7;
 export const TIE_BREAK_GRACE_MS = 20_000;
 export const CONNECT_TIMEOUT_MS = 10_000;
 /** Nearby entries disappear when not heard from for this long. */
-export const NEARBY_TTL_MS = 60_000;
+export const NEARBY_TTL_MS = 20_000;
 /** Minimum RSSI for automatic connection (avoid flaky edge-of-range links). */
 export const MIN_CONNECT_RSSI = -95;
 
 // --- Duty cycling (battery) -------------------------------------------------------------
 export const SCAN_PROFILE = {
   /** No links yet – search aggressively. */
-  searching: { scanMs: 8_000, pauseMs: 4_000 },
+  searching: { scanMs: 8_000, pauseMs: 2_000 },
   /** Connected, app in foreground. */
-  foreground: { scanMs: 6_000, pauseMs: 14_000 },
+  foreground: { scanMs: 6_000, pauseMs: 4_000 },
   /** App in background (foreground service). Android also throttles >5 scan starts / 30 s. */
   background: { scanMs: 5_000, pauseMs: 40_000 },
 } as const;

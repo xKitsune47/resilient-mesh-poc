@@ -5,6 +5,7 @@ export const KV_KEYS = {
   nodeId: 'identity.nodeId',
   nick: 'identity.nick',
   permissionsAcknowledged: 'onboarding.permissionsAcknowledged',
+  theme: 'settings.theme',
 } as const;
 
 export const kv = {

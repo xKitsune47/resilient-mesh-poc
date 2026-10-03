@@ -5,6 +5,7 @@ import { useColorScheme } from 'react-native';
 import { PaperProvider } from 'react-native-paper';
 
 import { useMeshLifecycle } from '../hooks/useMeshLifecycle';
+import { useAppearanceStore } from '../store/appearanceStore';
 import { useIdentityStore } from '../store/identityStore';
 import { usePermissionStore } from '../store/permissionStore';
 import { darkTheme, lightTheme } from '../theme';
@@ -25,6 +26,7 @@ export default function RootLayout() {
   const nick = useIdentityStore((s) => s.nick);
 
   useEffect(() => {
+    useAppearanceStore.getState().load();
     useIdentityStore.getState().load();
     usePermissionStore
       .getState()

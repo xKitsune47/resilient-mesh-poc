@@ -141,7 +141,7 @@ export class LinkManager extends Emitter<LinkEvents> {
       else this.stopRoles();
     }, true);
 
-    this.housekeepingTimer = setInterval(() => this.housekeeping(), 5_000);
+    this.housekeepingTimer = setInterval(() => this.housekeeping(), 2_000);
   }
 
   async stop() {

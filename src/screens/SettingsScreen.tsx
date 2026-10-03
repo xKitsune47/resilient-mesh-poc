@@ -1,11 +1,23 @@
 import Constants from 'expo-constants';
 import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, ToastAndroid, View } from 'react-native';
-import { Button, Dialog, Divider, HelperText, List, Portal, Text, TextInput, useTheme } from 'react-native-paper';
+import {
+  Button,
+  Dialog,
+  Divider,
+  HelperText,
+  List,
+  Portal,
+  SegmentedButtons,
+  Text,
+  TextInput,
+  useTheme,
+} from 'react-native-paper';
 
 import { openAppSettings } from '../services/permissions/permissions';
 import { MeshService } from '../services/mesh/MeshService';
 import { PROTOCOL_VERSION } from '../services/mesh/packet';
+import { type ThemePreference, useAppearanceStore } from '../store/appearanceStore';
 import { NICK_MAX, useIdentityStore, validateNick } from '../store/identityStore';
 import { useMeshStore } from '../store/meshStore';
 
@@ -14,6 +26,8 @@ export default function SettingsScreen() {
   const nodeId = useIdentityStore((s) => s.nodeId);
   const nick = useIdentityStore((s) => s.nick) ?? '';
   const radio = useMeshStore((s) => s.radio);
+  const themePref = useAppearanceStore((s) => s.theme);
+  const setTheme = useAppearanceStore((s) => s.setTheme);
   const [editNick, setEditNick] = useState(false);
   const [draft, setDraft] = useState(nick);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -57,6 +71,22 @@ export default function SettingsScreen() {
           descriptionStyle={{ fontFamily: 'monospace' }}
           left={(p) => <List.Icon {...p} icon="identifier" />}
         />
+      </List.Section>
+      <Divider />
+
+      <List.Section>
+        <List.Subheader>Wygląd</List.Subheader>
+        <View style={styles.appearance}>
+          <SegmentedButtons
+            value={themePref}
+            onValueChange={(v) => setTheme(v as ThemePreference)}
+            buttons={[
+              { value: 'light', label: 'Jasny', icon: 'white-balance-sunny' },
+              { value: 'dark', label: 'Ciemny', icon: 'weather-night' },
+              { value: 'system', label: 'Systemowy', icon: 'theme-light-dark' },
+            ]}
+          />
+        </View>
       </List.Section>
       <Divider />
 
@@ -160,6 +190,7 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
+  appearance: { paddingHorizontal: 16, paddingBottom: 8 },
   diag: { paddingHorizontal: 16, gap: 6 },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   about: { paddingHorizontal: 16, gap: 8, paddingBottom: 32 },
