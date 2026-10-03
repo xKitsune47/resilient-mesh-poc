@@ -4,6 +4,7 @@ import { Emitter } from '../../utils/Emitter';
 import { fromBase64, fromHex, toBase64 } from '../../utils/bytes';
 import { createLogger } from '../../utils/logger';
 import {
+  ADVERT_VERSION,
   ADVERTISE_MODE,
   CONNECT_TIMEOUT_MS,
   DEFAULT_MTU,
@@ -101,6 +102,8 @@ export class LinkManager extends Emitter<LinkEvents> {
   private pendingConnects = new Set<string>();
   private backoff = new Map<string, { attempts: number; nextTryAt: number }>();
   private peripheralMtu = new Map<string, number>();
+  /** BLE addresses of penalised neighbours → time until which their connections are refused. */
+  private blocked = new Map<string, number>();
 
   private myShortId = '';
   private advertisementPayload = new Uint8Array(0);
@@ -129,7 +132,7 @@ export class LinkManager extends Emitter<LinkEvents> {
     const idBytes = fromHex(nodeId).subarray(0, SHORT_ID_BYTES);
     this.myShortId = shortIdFromNodeId(nodeId);
     // Manufacturer payload: [shortId x4][protocol version]
-    this.advertisementPayload = new Uint8Array([...idBytes, 1]);
+    this.advertisementPayload = new Uint8Array([...idBytes, ADVERT_VERSION]);
 
     this.ble = new BleManager();
     this.radio.peripheralSupported = this.peripheral.supported;
@@ -421,6 +424,10 @@ export class LinkManager extends Emitter<LinkEvents> {
       if (mtu) existing.mtu = mtu;
       return existing;
     }
+    if ((this.blocked.get(address) ?? 0) > Date.now()) {
+      this.peripheral.disconnect(address);
+      return null;
+    }
     if (this.links.size >= MAX_TOTAL_LINKS) {
       log.warn('Link limit reached – rejecting central', address);
       this.peripheral.disconnect(address);
@@ -473,13 +480,21 @@ export class LinkManager extends Emitter<LinkEvents> {
   }
 
   /**
-   * Called by the router after the HELLO handshake. Resolves duplicate links between the
-   * same pair of nodes deterministically: both ends keep the link whose central is the
-   * node with the smaller id, so they always agree on which one to drop.
+   * Called by the router once the HELLO handshake proved who is on the other end. A link is
+   * bound exactly once. Resolves duplicate links between the same pair of nodes
+   * deterministically: both ends keep the link whose central is the node with the smaller id,
+   * so they always agree on which one to drop.
+   * @returns false if the link did not survive (unknown, mismatching, or dropped as a duplicate).
    */
-  bindPeer(linkId: string, myNodeId: string, peerNodeId: string, nick: string) {
+  bindPeer(linkId: string, myNodeId: string, peerNodeId: string, nick: string): boolean {
     const link = this.links.get(linkId);
-    if (!link) return;
+    if (!link) return false;
+    if (link.peerNodeId) return link.peerNodeId === peerNodeId;
+    // We dialled an advertisement carrying a short id – the node behind it must own that id.
+    if (link.expectedShortId && shortIdFromNodeId(peerNodeId) !== link.expectedShortId) {
+      this.closeLink(linkId, 'node id does not match advertisement');
+      return false;
+    }
     link.peerNodeId = peerNodeId;
     link.peerNick = nick;
     const duplicates = [...this.links.values()].filter((l) => l.peerNodeId === peerNodeId);
@@ -491,6 +506,18 @@ export class LinkManager extends Emitter<LinkEvents> {
       }
     }
     this.syncNearbyLinks();
+    return this.links.has(linkId);
+  }
+
+  /** Drops a misbehaving neighbour (e.g. forged packets) and keeps it away for a while. */
+  penalize(linkId: string, reason: string) {
+    const link = this.links.get(linkId);
+    if (!link) return;
+    const until = Date.now() + RECONNECT_MAX_MS;
+    const shortId = link.peerNodeId ? shortIdFromNodeId(link.peerNodeId) : link.expectedShortId;
+    if (shortId) this.backoff.set(shortId, { attempts: 6, nextTryAt: until });
+    this.blocked.set(link.address, until);
+    this.closeLink(linkId, reason);
   }
 
   // --------------------------------------------------------------------------------------
@@ -565,6 +592,9 @@ export class LinkManager extends Emitter<LinkEvents> {
         changed = true;
       }
     }
+    for (const [address, until] of this.blocked) {
+      if (until <= now) this.blocked.delete(address);
+    }
     if (changed) this.syncNearbyLinks();
     else this.emitNearby();
     this.maybeConnect();
@@ -608,7 +638,10 @@ export function shortIdFromNodeId(nodeId: string): string {
   return nodeId.replace(/-/g, '').slice(0, SHORT_ID_BYTES * 2).toLowerCase();
 }
 
-/** Manufacturer data as delivered by ble-plx: [companyId LE u16][shortId x4][version]. */
+/**
+ * Manufacturer data as delivered by ble-plx: [companyId LE u16][shortId x4][version].
+ * Nodes speaking another protocol version are ignored – a link to them would only waste a slot.
+ */
 function parseShortId(manufacturerData: string | null): string | null {
   if (!manufacturerData) return null;
   let bytes: Uint8Array;
@@ -617,9 +650,9 @@ function parseShortId(manufacturerData: string | null): string | null {
   } catch {
     return null;
   }
-  if (bytes.length < 2 + SHORT_ID_BYTES) return null;
+  if (bytes.length < 2 + SHORT_ID_BYTES + 1) return null;
   const company = bytes[0] | (bytes[1] << 8);
-  if (company !== MANUFACTURER_ID) return null;
+  if (company !== MANUFACTURER_ID || bytes[2 + SHORT_ID_BYTES] !== ADVERT_VERSION) return null;
   let hex = '';
   for (let i = 2; i < 2 + SHORT_ID_BYTES; i++) hex += bytes[i].toString(16).padStart(2, '0');
   return hex;

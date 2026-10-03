@@ -4,13 +4,17 @@ import { RefreshControl, SectionList, StyleSheet, View } from 'react-native';
 import { Chip, Icon, List, Surface, Text, useTheme } from 'react-native-paper';
 import { useShallow } from 'zustand/react/shallow';
 
+import { AlertBanner } from '../components/AlertBanner';
 import { Avatar } from '../components/Avatar';
 import { NetworkStatusBar } from '../components/NetworkStatusBar';
 import { SignalBars } from '../components/SignalBars';
+import { TrustBadge } from '../components/TrustBadge';
 import type { NearbyDevice } from '../services/ble/LinkManager';
 import type { MeshNode } from '../services/mesh/MeshRouter';
 import { MeshService } from '../services/mesh/MeshService';
+import { authorityName, trustLevel, useContactsStore } from '../store/contactsStore';
 import { useMeshStore } from '../store/meshStore';
+import { radius } from '../theme';
 import { formatRelative } from '../utils/time';
 
 type Row = { kind: 'nearby'; item: NearbyDevice } | { kind: 'node'; item: MeshNode };
@@ -20,6 +24,7 @@ export default function NetworkScreen() {
   const { radio, links, nearby, nodes } = useMeshStore(
     useShallow((s) => ({ radio: s.radio, links: s.links, nearby: s.nearby, nodes: s.nodes }))
   );
+  const trust = useContactsStore(useShallow((s) => ({ contacts: s.contacts, authorities: s.authorities })));
   const [refreshing, setRefreshing] = useState(false);
 
   const openDm = async (nodeId: string, nick: string) => {
@@ -50,6 +55,7 @@ export default function NetworkScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <AlertBanner />
       <NetworkStatusBar />
       <SectionList
         sections={sections}
@@ -63,13 +69,13 @@ export default function NetworkScreen() {
               <Stat label="Węzły w mesh" value={nodes.length} />
             </View>
             <View style={styles.chips}>
-              <Chip compact icon={radio.scanning ? 'radar' : 'pause-circle-outline'}>
+              <Chip compact style={styles.chip} icon={radio.scanning ? 'radar' : 'pause-circle-outline'}>
                 {radio.scanning ? 'Skanowanie' : 'Pauza skanu'}
               </Chip>
-              <Chip compact icon={radio.advertising ? 'broadcast' : 'broadcast-off'}>
+              <Chip compact style={styles.chip} icon={radio.advertising ? 'broadcast' : 'broadcast-off'}>
                 {radio.advertising ? 'Rozgłaszanie' : 'Brak rozgłaszania'}
               </Chip>
-              <Chip compact icon="swap-horizontal">
+              <Chip compact style={styles.chip} icon="swap-horizontal">
                 Central + {radio.peripheralSupported ? 'Peripheral' : 'bez Peripheral'}
               </Chip>
             </View>
@@ -82,9 +88,7 @@ export default function NetworkScreen() {
         }
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHeader}>
-            <Text variant="titleSmall" style={{ color: theme.colors.primary }}>
-              {section.title}
-            </Text>
+            <Text variant="titleLarge">{section.title}</Text>
             <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
               {section.data.length === 0
                 ? section.title.startsWith('W zasięgu')
@@ -98,7 +102,9 @@ export default function NetworkScreen() {
           if (row.kind === 'nearby') {
             const d = row.item;
             const node = d.nodeId ? nodeById.get(d.nodeId) : undefined;
-            const name = d.nick || node?.nick || `Węzeł ${d.shortId}`;
+            // An office name comes from a certificate only – a nick can claim anything.
+            const name = authorityName(trust, d.nodeId) ?? (d.nick || node?.nick || `Węzeł ${d.shortId}`);
+            const level = trustLevel(trust, d.nodeId);
             return (
               <List.Item
                 title={name}
@@ -110,28 +116,34 @@ export default function NetworkScreen() {
                 left={() => <Avatar id={d.nodeId ?? d.shortId} label={name} size={40} />}
                 right={() => (
                   <View style={styles.right}>
+                    {level !== 'unverified' && <TrustBadge level={level} compact />}
                     {d.linkId && <Icon source="link-variant" size={18} color={theme.colors.primary} />}
                     <SignalBars rssi={d.rssi} />
                   </View>
                 )}
                 onPress={d.nodeId ? () => openDm(d.nodeId!, name) : undefined}
-                style={styles.item}
+                style={[styles.item, { backgroundColor: theme.colors.surface }]}
               />
             );
           }
           const n = row.item;
+          const name = authorityName(trust, n.nodeId) ?? n.nick;
+          const level = trustLevel(trust, n.nodeId);
           return (
             <List.Item
-              title={n.nick}
+              title={name}
               description={n.hops <= 1 ? 'Bezpośrednio · dotknij, aby napisać' : `${n.hops} skoki · przez mesh`}
-              left={() => <Avatar id={n.nodeId} label={n.nick} size={40} />}
+              left={() => <Avatar id={n.nodeId} label={name} size={40} />}
               right={() => (
                 <View style={styles.right}>
-                  <Chip compact>{n.hops <= 1 ? '1 skok' : `${n.hops} skoki`}</Chip>
+                  {level !== 'unverified' && <TrustBadge level={level} compact />}
+                  <Chip compact style={styles.chip}>
+                    {n.hops <= 1 ? '1 skok' : `${n.hops} skoki`}
+                  </Chip>
                 </View>
               )}
               onPress={() => openDm(n.nodeId, n.nick)}
-              style={styles.item}
+              style={[styles.item, { backgroundColor: theme.colors.surface }]}
             />
           );
         }}
@@ -158,11 +170,12 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  card: { margin: 16, marginBottom: 4, padding: 16, borderRadius: 16, gap: 12 },
+  card: { margin: 16, marginBottom: 0, padding: 16, borderRadius: radius.lg, gap: 12 },
   stats: { flexDirection: 'row', justifyContent: 'space-around' },
   stat: { alignItems: 'center' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  sectionHeader: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 4 },
-  item: { paddingLeft: 16 },
+  chip: { borderRadius: radius.full },
+  sectionHeader: { paddingHorizontal: 16, paddingTop: 24, paddingBottom: 12, gap: 2 },
+  item: { marginHorizontal: 16, marginBottom: 8, paddingLeft: 12, borderRadius: radius.md, elevation: 1 },
   right: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });

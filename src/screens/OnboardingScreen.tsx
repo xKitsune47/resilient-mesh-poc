@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
-import { Button, HelperText, Icon, Text, TextInput, useTheme } from 'react-native-paper';
+import { HelperText, Icon, Text, TextInput, useTheme } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { PrimaryButton } from '../components/PrimaryButton';
+import { fingerprint } from '../services/crypto/keys';
 import { NICK_MAX, useIdentityStore, validateNick } from '../store/identityStore';
+import { radius } from '../theme';
 
 export default function OnboardingScreen() {
   const theme = useTheme();
@@ -24,7 +27,10 @@ export default function OnboardingScreen() {
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.hero}>
             <Icon source="access-point-network" size={72} color={theme.colors.primary} />
-            <Text variant="headlineMedium">Witaj w Mesh Chat</Text>
+            <View style={[styles.accent, { backgroundColor: theme.colors.secondary }]} />
+            <Text variant="headlineLarge" style={styles.center}>
+              Witaj w Mesh Chat
+            </Text>
             <Text variant="bodyLarge" style={[styles.center, { color: theme.colors.onSurfaceVariant }]}>
               Twój telefon stanie się węzłem sieci. Wiadomości przeskakują przez inne telefony, więc
               dotrą też do osób poza zasięgiem Bluetooth.
@@ -33,6 +39,7 @@ export default function OnboardingScreen() {
 
           <TextInput
             mode="outlined"
+            outlineStyle={{ borderRadius: radius.md }}
             label="Twój nick"
             value={nick}
             onChangeText={setNickInput}
@@ -51,17 +58,25 @@ export default function OnboardingScreen() {
 
           <View style={[styles.idBox, { backgroundColor: theme.colors.surfaceVariant }]}>
             <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-              ID urządzenia
+              Twoje bezpieczeństwo
+            </Text>
+            <Text variant="bodyMedium">
+              Rozmowy są szyfrowane end-to-end, a każda wiadomość jest podpisana kluczem, który powstał na tym
+              telefonie i nigdy go nie opuszcza. Komunikaty do wszystkich mogą nadawać tylko konta urzędowe z
+              certyfikatem. Szczegóły znajdziesz w Ustawieniach → Bezpieczeństwo.
+            </Text>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 8 }}>
+              Odcisk Twojego klucza
             </Text>
             <Text variant="bodySmall" selectable style={{ fontFamily: 'monospace' }}>
-              {nodeId}
+              {fingerprint(nodeId)}
             </Text>
           </View>
         </ScrollView>
         <View style={styles.actions}>
-          <Button mode="contained" icon="arrow-right" contentStyle={{ flexDirection: 'row-reverse' }} onPress={submit}>
+          <PrimaryButton icon="arrow-right" contentStyle={{ flexDirection: 'row-reverse' }} onPress={submit}>
             Dołącz do sieci
-          </Button>
+          </PrimaryButton>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -70,9 +85,10 @@ export default function OnboardingScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  content: { padding: 20, gap: 4 },
-  hero: { alignItems: 'center', gap: 12, marginVertical: 28 },
+  content: { padding: 16, gap: 4 },
+  hero: { alignItems: 'center', gap: 12, marginVertical: 24 },
+  accent: { width: 32, height: 4, borderRadius: radius.full },
   center: { textAlign: 'center' },
-  idBox: { padding: 12, borderRadius: 12, gap: 2, marginTop: 12 },
-  actions: { padding: 20 },
+  idBox: { padding: 12, borderRadius: radius.md, gap: 2, marginTop: 12 },
+  actions: { padding: 16 },
 });

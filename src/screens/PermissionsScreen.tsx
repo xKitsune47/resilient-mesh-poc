@@ -3,10 +3,11 @@ import { AppState, ScrollView, StyleSheet, ToastAndroid, View } from 'react-nati
 import { Button, Icon, Surface, Text, useTheme } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { PrimaryButton } from '../components/PrimaryButton';
 import { openAppSettings, PERMISSIONS, PermissionState } from '../services/permissions/permissions';
 import { useIdentityStore } from '../store/identityStore';
 import { usePermissionStore } from '../store/permissionStore';
-import { statusColors } from '../theme';
+import { radius, statusColors } from '../theme';
 
 const STATE_UI: Record<PermissionState, { icon: string; color: string; label: string }> = {
   granted: { icon: 'check-circle', color: statusColors.connected, label: 'Nadane' },
@@ -63,7 +64,7 @@ export default function PermissionsScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.hero}>
           <Icon source="bluetooth-connect" size={64} color={theme.colors.primary} />
-          <Text variant="headlineMedium" style={styles.center}>
+          <Text variant="headlineLarge" style={styles.center}>
             Uprawnienia
           </Text>
           <Text variant="bodyLarge" style={[styles.center, { color: theme.colors.onSurfaceVariant }]}>
@@ -108,17 +109,17 @@ export default function PermissionsScreen() {
       <View style={styles.actions}>
         {blocked ? (
           <>
-            <Button mode="contained" icon="cog" onPress={openAppSettings}>
+            <PrimaryButton icon="cog-outline" onPress={openAppSettings}>
               Otwórz ustawienia systemowe
-            </Button>
+            </PrimaryButton>
             <Button mode="text" onPress={ask} loading={requesting}>
               Spróbuj ponownie
             </Button>
           </>
         ) : (
-          <Button mode="contained" icon="shield-check" onPress={ask} loading={requesting} disabled={requesting}>
+          <PrimaryButton icon="shield-check-outline" onPress={ask} loading={requesting} disabled={requesting}>
             Nadaj uprawnienia
-          </Button>
+          </PrimaryButton>
         )}
       </View>
     </SafeAreaView>
@@ -127,11 +128,11 @@ export default function PermissionsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  content: { padding: 20, gap: 16 },
+  content: { padding: 16, gap: 16 },
   hero: { alignItems: 'center', gap: 10, marginTop: 12, marginBottom: 4 },
   center: { textAlign: 'center' },
-  alert: { flexDirection: 'row', gap: 10, padding: 14, borderRadius: 12, alignItems: 'flex-start' },
-  list: { borderRadius: 16, paddingVertical: 4 },
+  alert: { flexDirection: 'row', gap: 12, padding: 16, borderRadius: radius.md, alignItems: 'flex-start' },
+  list: { borderRadius: radius.lg, paddingVertical: 4 },
   item: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
-  actions: { padding: 20, gap: 8 },
+  actions: { padding: 16, gap: 8 },
 });

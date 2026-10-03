@@ -5,8 +5,10 @@ import { useColorScheme } from 'react-native';
 import { PaperProvider } from 'react-native-paper';
 
 import { useMeshLifecycle } from '../hooks/useMeshLifecycle';
+import RecoveryScreen from '../screens/RecoveryScreen';
 import { useAppearanceStore } from '../store/appearanceStore';
 import { useIdentityStore } from '../store/identityStore';
+import { useMeshStore } from '../store/meshStore';
 import { usePermissionStore } from '../store/permissionStore';
 import { darkTheme, lightTheme } from '../theme';
 
@@ -14,9 +16,10 @@ void SplashScreen.preventAutoHideAsync();
 
 /**
  * Navigation guards (first launch flow):
- *   permissions not granted  → /permissions   (system dialogs; cannot continue without them)
- *   no nick yet              → /onboarding
- *   otherwise                → tabs (chats / network / settings) + chat screens
+ *   keys / database unreadable → recovery screen (nothing else is reachable)
+ *   permissions not granted    → /permissions   (system dialogs; cannot continue without them)
+ *   no nick yet                → /onboarding
+ *   otherwise                  → tabs (chats / network / settings) + chat and security screens
  */
 export default function RootLayout() {
   const scheme = useColorScheme();
@@ -24,6 +27,8 @@ export default function RootLayout() {
   const [ready, setReady] = useState(false);
   const granted = usePermissionStore((s) => s.granted);
   const nick = useIdentityStore((s) => s.nick);
+  const identityLost = useIdentityStore((s) => s.status === 'lost');
+  const storageError = useMeshStore((s) => s.storageError);
 
   useEffect(() => {
     useAppearanceStore.getState().load();
@@ -44,26 +49,37 @@ export default function RootLayout() {
   return (
     <PaperProvider theme={theme}>
       <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: theme.colors.surface },
-          headerTintColor: theme.colors.onSurface,
-          contentStyle: { backgroundColor: theme.colors.background },
-          headerShadowVisible: false,
-        }}
-      >
-        <Stack.Protected guard={!granted}>
-          <Stack.Screen name="permissions" options={{ headerShown: false }} />
-        </Stack.Protected>
-        <Stack.Protected guard={granted && !nick}>
-          <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        </Stack.Protected>
-        <Stack.Protected guard={granted && !!nick}>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="chat/[id]" options={{ title: 'Czat' }} />
-          <Stack.Screen name="new-group" options={{ title: 'Nowa grupa', presentation: 'modal' }} />
-        </Stack.Protected>
-      </Stack>
+      {identityLost || storageError ? (
+        <RecoveryScreen kind={identityLost ? 'identity' : 'database'} />
+      ) : (
+        <Stack
+          screenOptions={{
+            headerStyle: { backgroundColor: theme.colors.background },
+            headerTintColor: theme.colors.primary,
+            headerTitleAlign: 'center',
+            headerTitleStyle: { fontSize: 17, fontWeight: '600' },
+            contentStyle: { backgroundColor: theme.colors.background },
+            headerShadowVisible: false,
+          }}
+        >
+          <Stack.Protected guard={!granted}>
+            <Stack.Screen name="permissions" options={{ headerShown: false }} />
+          </Stack.Protected>
+          <Stack.Protected guard={granted && !nick}>
+            <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+          </Stack.Protected>
+          <Stack.Protected guard={granted && !!nick}>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="chat/[id]" options={{ title: 'Czat' }} />
+            <Stack.Screen name="alerts" options={{ title: 'Komunikaty urzędowe' }} />
+            <Stack.Screen name="compose-alert" options={{ title: 'Nowy alert', presentation: 'modal' }} />
+            <Stack.Screen name="security" options={{ title: 'Bezpieczeństwo' }} />
+            <Stack.Screen name="my-key" options={{ title: 'Mój klucz' }} />
+            <Stack.Screen name="verify/[id]" options={{ title: 'Weryfikacja klucza' }} />
+            <Stack.Screen name="install-cert" options={{ title: 'Certyfikat urzędowy' }} />
+          </Stack.Protected>
+        </Stack>
+      )}
     </PaperProvider>
   );
 }

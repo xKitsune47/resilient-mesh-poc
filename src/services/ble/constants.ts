@@ -13,6 +13,8 @@ export const MESH_TX_CHAR_UUID = '7a3f0003-4d2c-4b8e-9f1a-6c5d3e2b1a00';
 /** 0xFFFF = "reserved for testing" company id; the payload is the node's 4-byte short id + protocol version. */
 export const MANUFACTURER_ID = 0xffff;
 export const SHORT_ID_BYTES = 4;
+/** Last byte of the advertisement payload; equals the mesh protocol version (packet.ts). */
+export const ADVERT_VERSION = 2;
 
 /** ATT MTU we ask for; Android 14+ always negotiates 517. */
 export const REQUESTED_MTU = 517;

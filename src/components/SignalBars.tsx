@@ -1,6 +1,8 @@
 import { StyleSheet, View } from 'react-native';
 import { Text, useTheme } from 'react-native-paper';
 
+import { statusColors } from '../theme';
+
 /** Maps RSSI (dBm) to 0–4 bars. */
 export function rssiToLevel(rssi: number): number {
   if (rssi >= -60) return 4;
@@ -24,7 +26,7 @@ export function SignalBars({ rssi, showValue = true }: { rssi: number; showValue
               styles.bar,
               {
                 height: 5 + i * 4,
-                backgroundColor: i < level ? theme.colors.primary : theme.colors.outlineVariant,
+                backgroundColor: i < level ? statusColors.connected : theme.colors.outlineVariant,
               },
             ]}
           />

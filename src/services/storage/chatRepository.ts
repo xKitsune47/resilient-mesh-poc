@@ -12,11 +12,12 @@ interface MessageRow {
   direction: 'in' | 'out';
   delivered_count: number;
   hops: number | null;
+  authority: string | null;
 }
 
 interface ConversationRow {
   id: string;
-  type: 'dm' | 'group';
+  type: 'dm';
   title: string;
   peer_id: string | null;
   created_at: number;
@@ -36,6 +37,7 @@ const toMessage = (r: MessageRow): ChatMessage => ({
   direction: r.direction,
   deliveredCount: r.delivered_count,
   hops: r.hops,
+  authority: r.authority,
 });
 
 const toConversation = (r: ConversationRow): Conversation => ({
@@ -104,8 +106,8 @@ export const chatRepository = {
     const db = await getDb();
     const res = await db.runAsync(
       `INSERT OR IGNORE INTO messages
-        (id, conversation_id, sender_id, sender_nick, text, timestamp, status, direction, delivered_count, hops)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, conversation_id, sender_id, sender_nick, text, timestamp, status, direction, delivered_count, hops, authority)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       m.id,
       m.conversationId,
       m.senderId,
@@ -115,7 +117,8 @@ export const chatRepository = {
       m.status,
       m.direction,
       m.deliveredCount,
-      m.hops
+      m.hops,
+      m.authority
     );
     return res.changes > 0;
   },

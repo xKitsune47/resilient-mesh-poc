@@ -1,6 +1,7 @@
 import { Avatar as PaperAvatar } from 'react-native-paper';
 
-const PALETTE = ['#0B8A6F', '#3A6B8C', '#8C5A3A', '#6B3A8C', '#8C3A55', '#3A8C4A', '#8C7A3A', '#3A5A8C'];
+// Primary blue plus muted shades of the same cool family (DESIGN.md → Avatar).
+const PALETTE = ['#0052A5', '#1B66B5', '#2E5E8C', '#34708F', '#4A5FA8', '#27648F', '#55689A', '#16508A'];
 
 function hash(s: string) {
   let h = 0;
@@ -8,8 +9,8 @@ function hash(s: string) {
   return Math.abs(h);
 }
 
-/** Deterministic colored initials avatar (color derived from node/group id). */
-export function Avatar({ id, label, size = 44, icon }: { id: string; label: string; size?: number; icon?: string }) {
+/** Deterministic colored initials avatar (color derived from the node / conversation id). */
+export function Avatar({ id, label, size = 40, icon }: { id: string; label: string; size?: number; icon?: string }) {
   const color = PALETTE[hash(id) % PALETTE.length];
   if (icon) return <PaperAvatar.Icon size={size} icon={icon} style={{ backgroundColor: color }} color="#fff" />;
   const initials =

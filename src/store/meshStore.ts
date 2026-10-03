@@ -20,6 +20,10 @@ interface MeshState {
   nearby: NearbyDevice[];
   /** All nodes reachable through the mesh (direct + multi-hop). */
   nodes: MeshNode[];
+  /** Median difference between the neighbours' clocks and ours (ms); null without neighbours. */
+  clockSkewMs: number | null;
+  /** The encrypted database could not be opened (its key is gone or does not match). */
+  storageError: boolean;
   set: (patch: Partial<Omit<MeshState, 'set'>>) => void;
 }
 
@@ -35,6 +39,8 @@ export const useMeshStore = create<MeshState>((set) => ({
   links: [],
   nearby: [],
   nodes: [],
+  clockSkewMs: null,
+  storageError: false,
   set: (patch) => set(patch),
 }));
 

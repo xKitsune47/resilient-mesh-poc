@@ -1,7 +1,6 @@
-import * as Crypto from 'expo-crypto';
-
 /**
  * Byte helpers without external dependencies (Hermes lacks TextDecoder / Buffer).
+ * Pure on purpose (randomness lives in ./random) so protocol code can be unit-tested.
  */
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -126,11 +125,16 @@ export function concatBytes(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-/** Cryptographically secure random bytes (native SecureRandom via expo-crypto). */
-export function randomBytes(n: number): Uint8Array {
-  return Crypto.getRandomBytes(n);
-}
-
-export function randomId(): string {
-  return Crypto.randomUUID();
+/**
+ * Strict base64 for untrusted input (QR codes, wire fields): exact byte length and canonical
+ * encoding only – `fromBase64` alone tolerates whitespace, missing padding and base64url.
+ */
+export function fromBase64Strict(input: unknown, length: number): Uint8Array | null {
+  if (typeof input !== 'string') return null;
+  try {
+    const bytes = fromBase64(input);
+    return bytes.length === length && toBase64(bytes) === input ? bytes : null;
+  } catch {
+    return null;
+  }
 }

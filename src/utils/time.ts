@@ -14,7 +14,16 @@ export function formatRelative(ts: number, now = Date.now()): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** "03.10.2026" */
+export function formatDate(ts: number): string {
+  const d = new Date(ts);
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}
+
+/** "03.10.2026, 14:05" */
+export const formatDateTime = (ts: number) => `${formatDate(ts)}, ${formatTime(ts)}`;
+
+export const sleep =(ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Random integer in [min, max]. */
 export const jitter = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
