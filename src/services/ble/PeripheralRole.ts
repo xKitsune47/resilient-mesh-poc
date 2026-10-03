@@ -1,15 +1,17 @@
-import MeshPeripheral, { MeshPeripheralModuleEvents } from '../../../modules/mesh-peripheral';
-import { toBase64 } from '../../utils/bytes';
-import { createLogger } from '../../utils/logger';
+import MeshPeripheral, {
+  MeshPeripheralModuleEvents,
+} from "../../../modules/mesh-peripheral";
+import { toBase64 } from "../../utils/bytes";
+import { createLogger } from "../../utils/logger";
 import {
   ADVERTISE_MODE,
   MANUFACTURER_ID,
   MESH_RX_CHAR_UUID,
   MESH_SERVICE_UUID,
   MESH_TX_CHAR_UUID,
-} from './constants';
+} from "./constants";
 
-const log = createLogger('Peripheral');
+const log = createLogger("Peripheral");
 
 /**
  * Thin wrapper around the native MeshPeripheral module (GATT server + advertiser).
@@ -28,13 +30,19 @@ export class PeripheralRole {
     }
   }
 
-  on<K extends keyof MeshPeripheralModuleEvents>(event: K, fn: MeshPeripheralModuleEvents[K]) {
+  on<K extends keyof MeshPeripheralModuleEvents>(
+    event: K,
+    fn: MeshPeripheralModuleEvents[K],
+  ) {
     this.subs.push(MeshPeripheral.addListener(event, fn));
   }
 
-  async start(advertisementPayload: Uint8Array, mode: number = ADVERTISE_MODE.balanced) {
+  async start(
+    advertisementPayload: Uint8Array,
+    mode: number = ADVERTISE_MODE.balanced,
+  ) {
     if (!this.supported) {
-      log.warn('Peripheral role not supported – running central-only');
+      log.warn("Peripheral role not supported – running central-only");
       return false;
     }
     await MeshPeripheral.startPeripheral({
@@ -44,7 +52,7 @@ export class PeripheralRole {
       manufacturerId: MANUFACTURER_ID,
       manufacturerData: toBase64(advertisementPayload),
       advertiseMode: mode,
-      txPowerLevel: 2,
+      txPowerLevel: 3,
     });
     this.running = true;
     return true;
@@ -55,7 +63,7 @@ export class PeripheralRole {
     try {
       await MeshPeripheral.stopPeripheral();
     } catch (e) {
-      log.warn('stop failed', e);
+      log.warn("stop failed", e);
     }
   }
 
