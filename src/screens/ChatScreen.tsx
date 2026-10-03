@@ -1,4 +1,5 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, StyleSheet, View } from 'react-native';
 import { Text } from 'react-native-paper';
@@ -27,6 +28,7 @@ const sameRun = (a: ChatMessage, b: ChatMessage | undefined) =>
 
 export default function ChatScreen() {
   const theme = useAppTheme();
+  const headerHeight = useHeaderHeight();
   const { id } = useLocalSearchParams<{ id: string }>();
   const conversation = useChatStore((s) => s.conversations.find((c) => c.id === id));
   const messages = useChatStore((s) => s.messages[id] ?? EMPTY);
@@ -174,7 +176,14 @@ export default function ChatScreen() {
         }}
       />
       <AlertBanner />
-      <KeyboardAvoidingView style={[styles.flex, { backgroundColor: theme.colors.background }]} behavior="height">
+      {/* The window does not shrink for the keyboard (edge-to-edge), and the view measures itself
+          against its parent – the header above it has to be passed in. Padding, not height: the
+          alert banner can appear or grow while the chat is open. */}
+      <KeyboardAvoidingView
+        style={[styles.flex, { backgroundColor: theme.colors.background }]}
+        behavior="padding"
+        keyboardVerticalOffset={headerHeight}
+      >
         <FlatList
           data={reversed}
           inverted

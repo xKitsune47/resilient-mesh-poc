@@ -1,8 +1,9 @@
 import { router } from 'expo-router';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet } from 'react-native';
 import { Text } from 'react-native-paper';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PrimaryButton } from '../components/PrimaryButton';
 import { QrScanner } from '../components/QrScanner';
@@ -28,7 +29,7 @@ const FAILURES: Record<Exclude<InstallCertResult, { ok: true }>['reason'], strin
  */
 export default function InstallCertScreen() {
   const theme = useAppTheme();
-  const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const [scanning, setScanning] = useState(true);
   const [scanKey, setScanKey] = useState(0);
   const [text, setText] = useState('');
@@ -57,71 +58,73 @@ export default function InstallCertScreen() {
   };
 
   return (
-    <View style={[styles.screen, { backgroundColor: theme.colors.background }]}>
-      <ScrollView
-        // While the camera is live there is no footer, so the content clears the system bar itself.
-        contentContainerStyle={[styles.content, !installed && scanning && { paddingBottom: insets.bottom + 24 }]}
-        keyboardShouldPersistTaps="handled"
-      >
+    // The room for the system navigation bar sits outside the keyboard-avoiding view, so with the
+    // keyboard open it ends up behind the keyboard instead of as a gap above it.
+    <SafeAreaView edges={['bottom']} style={[styles.screen, { backgroundColor: theme.colors.background }]}>
+      {/* The window does not shrink for the keyboard (edge-to-edge), and the view measures itself
+          against its parent – the header above it has to be passed in. */}
+      <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {installed ? (
+            <Notice tone="success" icon="shield-star-outline">
+              Certyfikat zainstalowany: {installed}. To urządzenie jest teraz kontem urzędowym – Twoje wiadomości
+              będą oznaczane jako pilne, a w Ustawieniach możesz nadać alert do wszystkich.
+            </Notice>
+          ) : (
+            <>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                Certyfikat konta urzędowego wydaje operator po sprawdzeniu Twojej tożsamości i klucza (Ustawienia →
+                Mój klucz). Zeskanuj kod QR z jego ekranu albo wklej certyfikat jako tekst.
+              </Text>
+
+              {scanning && <QrScanner key={scanKey} onScan={(data) => void install(data)} />}
+
+              {error && (
+                <Notice tone="error" icon="alert-outline">
+                  {error}
+                </Notice>
+              )}
+
+              <Text variant="titleMedium">Albo wklej tekst</Text>
+              <Field
+                multiline
+                mono
+                placeholder="MC1:CERT:…"
+                value={text}
+                onChangeText={setText}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <AppButton
+                variant="tonal"
+                onPress={() => void install(text)}
+                disabled={!text.trim() || busy}
+                loading={busy}
+              >
+                Zainstaluj z tekstu
+              </AppButton>
+            </>
+          )}
+        </ScrollView>
+
+        {/* Success → back; a failed attempt → scan again. While the camera is live there is nothing to press. */}
         {installed ? (
-          <Notice tone="success" icon="shield-star-outline">
-            Certyfikat zainstalowany: {installed}. To urządzenie jest teraz kontem urzędowym – Twoje wiadomości będą
-            oznaczane jako pilne, a w Ustawieniach możesz nadać alert do wszystkich.
-          </Notice>
-        ) : (
-          <>
-            <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-              Certyfikat konta urzędowego wydaje operator po sprawdzeniu Twojej tożsamości i klucza (Ustawienia → Mój
-              klucz). Zeskanuj kod QR z jego ekranu albo wklej certyfikat jako tekst.
-            </Text>
-
-            {scanning && <QrScanner key={scanKey} onScan={(data) => void install(data)} />}
-
-            {error && (
-              <Notice tone="error" icon="alert-outline">
-                {error}
-              </Notice>
-            )}
-
-            <Text variant="titleMedium">Albo wklej tekst</Text>
-            <Field
-              multiline
-              mono
-              placeholder="MC1:CERT:…"
-              value={text}
-              onChangeText={setText}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <AppButton
-              variant="tonal"
-              onPress={() => void install(text)}
-              disabled={!text.trim() || busy}
-              loading={busy}
-            >
-              Zainstaluj z tekstu
-            </AppButton>
-          </>
-        )}
-      </ScrollView>
-
-      {/* Success → back; a failed attempt → scan again. While the camera is live there is nothing to press. */}
-      {installed ? (
-        <BottomActions>
-          <PrimaryButton icon="arrow-left" onPress={() => router.back()}>
-            Wróć
-          </PrimaryButton>
-        </BottomActions>
-      ) : (
-        !scanning && (
-          <BottomActions>
-            <PrimaryButton icon="qrcode-scan" onPress={scanAgain}>
-              Skanuj ponownie
+          <BottomActions safeArea={false}>
+            <PrimaryButton icon="arrow-left" onPress={() => router.back()}>
+              Wróć
             </PrimaryButton>
           </BottomActions>
-        )
-      )}
-    </View>
+        ) : (
+          !scanning && (
+            <BottomActions safeArea={false}>
+              <PrimaryButton icon="qrcode-scan" onPress={scanAgain}>
+                Skanuj ponownie
+              </PrimaryButton>
+            </BottomActions>
+          )
+        )}
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

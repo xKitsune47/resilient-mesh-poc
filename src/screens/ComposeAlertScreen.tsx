@@ -1,7 +1,9 @@
 import { router } from 'expo-router';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, ScrollView, StyleSheet, ToastAndroid, View } from 'react-native';
 import { Text } from 'react-native-paper';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PrimaryButton } from '../components/PrimaryButton';
 import { BottomActions, EmptyState, Field, Notice, SegmentedControl, Sheet } from '../components/ui';
@@ -30,6 +32,7 @@ const FAILURES: Record<Exclude<AlertResult, { ok: true }>['reason'], string> = {
 /** Broadcast form for authority accounts. Everything here is typed by the user – nothing is prefilled. */
 export default function ComposeAlertScreen() {
   const theme = useAppTheme();
+  const headerHeight = useHeaderHeight();
   const authority = useIdentityStore((s) => s.authority);
   const isAuthority = useIdentityStore((s) => selectIsAuthority(s));
   const linkCount = useMeshStore((s) => s.links.length);
@@ -68,75 +71,81 @@ export default function ComposeAlertScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={[styles.screen, { backgroundColor: theme.colors.background }]} behavior="height">
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-          Nadajesz jako <Text style={{ fontWeight: '600' }}>{authority.name}</Text>. Alert zobaczy każdy w zasięgu sieci,
-          przypięty na górze aplikacji, i będzie on przekazywany dalej także osobom, które dołączą później.
-        </Text>
+    // The room for the system navigation bar sits outside the keyboard-avoiding view, so with the
+    // keyboard open it ends up behind the keyboard instead of as a gap under the button.
+    <SafeAreaView edges={['bottom']} style={[styles.screen, { backgroundColor: theme.colors.background }]}>
+      {/* The window does not shrink for the keyboard (edge-to-edge), and the view measures itself
+          against its parent – the header above it has to be passed in. */}
+      <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+            Nadajesz jako <Text style={{ fontWeight: '600' }}>{authority.name}</Text>. Alert zobaczy każdy w zasięgu sieci,
+            przypięty na górze aplikacji, i będzie on przekazywany dalej także osobom, które dołączą później.
+          </Text>
 
-        {(clockOff || linkCount === 0) && (
-          <Notice tone="error" icon="alert-outline">
-            {clockOff
-              ? 'Zegar tego telefonu różni się od sąsiadów. Alert z błędnym czasem może nie być wyświetlany – ustaw poprawną godzinę przed nadaniem.'
-              : 'Brak połączeń z innymi urządzeniami. Alert zostanie zapisany i przekazany pierwszemu urządzeniu, które się połączy.'}
-          </Notice>
-        )}
+          {(clockOff || linkCount === 0) && (
+            <Notice tone="error" icon="alert-outline">
+              {clockOff
+                ? 'Zegar tego telefonu różni się od sąsiadów. Alert z błędnym czasem może nie być wyświetlany – ustaw poprawną godzinę przed nadaniem.'
+                : 'Brak połączeń z innymi urządzeniami. Alert zostanie zapisany i przekazany pierwszemu urządzeniu, które się połączy.'}
+            </Notice>
+          )}
 
-        <Field
-          label="Nagłówek"
-          value={headline}
-          onChangeText={setHeadline}
-          maxLength={ALERT_HEADLINE_MAX}
-          counter={`${headline.length}/${ALERT_HEADLINE_MAX}`}
-        />
-        <Field
-          label="Treść"
-          value={text}
-          onChangeText={setText}
-          multiline
-          numberOfLines={5}
-          maxLength={ALERT_TEXT_MAX}
-          helper={`${text.length}/${ALERT_TEXT_MAX} · pisz krótko: co się dzieje, gdzie, co robić.`}
-        />
+          <Field
+            label="Nagłówek"
+            value={headline}
+            onChangeText={setHeadline}
+            maxLength={ALERT_HEADLINE_MAX}
+            counter={`${headline.length}/${ALERT_HEADLINE_MAX}`}
+          />
+          <Field
+            label="Treść"
+            value={text}
+            onChangeText={setText}
+            multiline
+            numberOfLines={5}
+            maxLength={ALERT_TEXT_MAX}
+            helper={`${text.length}/${ALERT_TEXT_MAX} · pisz krótko: co się dzieje, gdzie, co robić.`}
+          />
 
-        <Text variant="titleMedium">Ważność</Text>
-        <SegmentedControl value={hours} onChange={setHours} options={LIFETIMES} />
+          <Text variant="titleMedium">Ważność</Text>
+          <SegmentedControl value={hours} onChange={setHours} options={LIFETIMES} />
 
-        {error && (
-          <Notice tone="error" icon="alert-circle-outline">
-            {error}
-          </Notice>
-        )}
-      </ScrollView>
-      <BottomActions>
-        <PrimaryButton
-          icon="bullhorn-outline"
-          onPress={() => {
-            // The confirmation is a bottom sheet: an open keyboard would cover it.
-            Keyboard.dismiss();
-            setConfirm(true);
-          }}
-          disabled={!valid || busy}
-          loading={busy}
+          {error && (
+            <Notice tone="error" icon="alert-circle-outline">
+              {error}
+            </Notice>
+          )}
+        </ScrollView>
+        <BottomActions safeArea={false}>
+          <PrimaryButton
+            icon="bullhorn-outline"
+            onPress={() => {
+              // The confirmation is a bottom sheet: an open keyboard would cover it.
+              Keyboard.dismiss();
+              setConfirm(true);
+            }}
+            disabled={!valid || busy}
+            loading={busy}
+          >
+            Nadaj do wszystkich
+          </PrimaryButton>
+        </BottomActions>
+
+        <Sheet
+          visible={confirm}
+          onDismiss={() => setConfirm(false)}
+          title="Nadać alert?"
+          primary={{ label: 'Nadaj', onPress: send }}
         >
-          Nadaj do wszystkich
-        </PrimaryButton>
-      </BottomActions>
-
-      <Sheet
-        visible={confirm}
-        onDismiss={() => setConfirm(false)}
-        title="Nadać alert?"
-        primary={{ label: 'Nadaj', onPress: send }}
-      >
-        <Text variant="titleMedium">{headline.trim()}</Text>
-        <Text variant="bodyLarge">
-          Nadawca: {authority.name}. Ważny {hours} h. Po potwierdzeniu poprosimy o odcisk palca lub kod blokady
-          telefonu.
-        </Text>
-      </Sheet>
-    </KeyboardAvoidingView>
+          <Text variant="titleMedium">{headline.trim()}</Text>
+          <Text variant="bodyLarge">
+            Nadawca: {authority.name}. Ważny {hours} h. Po potwierdzeniu poprosimy o odcisk palca lub kod blokady
+            telefonu.
+          </Text>
+        </Sheet>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
