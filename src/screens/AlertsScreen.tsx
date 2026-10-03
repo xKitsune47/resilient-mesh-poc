@@ -1,19 +1,22 @@
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, ToastAndroid, View } from 'react-native';
-import { Button, Dialog, Icon, Portal, Text, useTheme } from 'react-native-paper';
+import { Icon, Text } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PrimaryButton } from '../components/PrimaryButton';
+import { AppButton, BottomActions, Card, EmptyState, SectionHeader, Sheet } from '../components/ui';
 import type { StoredAlert } from '../services/mesh/alertPolicy';
 import { MeshService } from '../services/mesh/MeshService';
 import { alertKey, useActiveAlerts, useAlertStore } from '../store/alertStore';
 import { selectIsAuthority, useIdentityStore } from '../store/identityStore';
-import { radius } from '../theme';
+import { useAppTheme } from '../theme';
 import { formatDateTime } from '../utils/time';
 
 /** Every alert this device holds: the active ones in full, then the ended ones. */
 export default function AlertsScreen() {
-  const theme = useTheme();
+  const theme = useAppTheme();
+  const insets = useSafeAreaInsets();
   const all = useAlertStore((s) => s.alerts);
   const active = useActiveAlerts();
   const nodeId = useIdentityStore((s) => s.nodeId);
@@ -42,22 +45,20 @@ export default function AlertsScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.colors.background }]}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: isAuthority ? 16 : insets.bottom + 24 }]}>
         <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
           Komunikaty do wszystkich mogą nadawać wyłącznie konta urzędowe z certyfikatem. Każdy jest podpisany – nie
           da się go podrobić ani zmienić po drodze.
         </Text>
 
         {active.length === 0 && (
-          <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
-            <Text variant="bodyLarge">Brak aktywnych komunikatów.</Text>
-          </View>
+          <EmptyState tone="neutral" icon="information-outline" text="Brak aktywnych komunikatów." />
         )}
         {active.map((a) => (
-          <View key={alertKey(a)} style={[styles.card, styles.active, { backgroundColor: theme.colors.surface, borderColor: theme.colors.error }]}>
+          <Card key={alertKey(a)} alert>
             <View style={styles.label}>
-              <Icon source="alert-octagon-outline" size={18} color={theme.colors.error} />
-              <Text variant="labelMedium" style={{ color: theme.colors.error, flex: 1 }}>
+              <Icon source="alert-octagon-outline" size={20} color={theme.colors.errorText} />
+              <Text variant="labelMedium" style={{ color: theme.colors.errorText, flex: 1 }}>
                 PILNE · {a.authority}
               </Text>
             </View>
@@ -67,20 +68,25 @@ export default function AlertsScreen() {
                 {a.text}
               </Text>
             )}
-            <Text variant="labelSmall" style={{ color: theme.colors.onSurfaceVariant }}>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
               Nadano {formatDateTime(a.timestamp)} · ważny do {formatDateTime(Math.min(a.exp, a.certExp))}
             </Text>
             {a.origin === nodeId && (
-              <Button mode="outlined" textColor={theme.colors.error} onPress={() => setToCancel(a)} style={styles.cancel}>
+              <AppButton variant="text" danger fullWidth={false} onPress={() => setToCancel(a)} style={styles.cancel}>
                 Odwołaj alert
-              </Button>
+              </AppButton>
             )}
-          </View>
+          </Card>
         ))}
 
-        {ended.length > 0 && <Text variant="titleLarge">Zakończone</Text>}
+        {ended.length > 0 && (
+          // The header brings its own margins (24 above, 12 below); this takes the list gap back out.
+          <View style={styles.section}>
+            <SectionHeader title="Zakończone" />
+          </View>
+        )}
         {ended.map((a) => (
-          <View key={alertKey(a)} style={[styles.card, { backgroundColor: theme.colors.surface }]}>
+          <Card key={alertKey(a)}>
             <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
               {a.cancelled ? 'Odwołany' : 'Wygasł'} · {a.authority}
             </Text>
@@ -95,35 +101,27 @@ export default function AlertsScreen() {
             <Text variant="labelSmall" style={{ color: theme.colors.onSurfaceVariant }}>
               {formatDateTime(a.timestamp)}
             </Text>
-          </View>
+          </Card>
         ))}
       </ScrollView>
 
       {isAuthority && (
-        <View style={styles.actions}>
+        <BottomActions>
           <PrimaryButton icon="bullhorn-outline" onPress={() => router.push('/compose-alert')}>
             Nowy alert
           </PrimaryButton>
-        </View>
+        </BottomActions>
       )}
 
-      <Portal>
-        <Dialog visible={!!toCancel} onDismiss={() => setToCancel(null)}>
-          <Dialog.Title>Odwołać alert?</Dialog.Title>
-          <Dialog.Content>
-            <Text>
-              „{toCancel?.headline}” zniknie u wszystkich, do których dotrze odwołanie. Tej operacji nie da się cofnąć –
-              w razie pomyłki trzeba nadać nowy alert.
-            </Text>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setToCancel(null)}>Anuluj</Button>
-            <Button textColor={theme.colors.error} onPress={cancel}>
-              Odwołaj
-            </Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
+      <Sheet
+        visible={!!toCancel}
+        onDismiss={() => setToCancel(null)}
+        title="Odwołać alert?"
+        primary={{ label: 'Odwołaj', destructive: true, onPress: cancel }}
+      >
+        „{toCancel?.headline}” zniknie u wszystkich, do których dotrze odwołanie. Tej operacji nie da się cofnąć – w
+        razie pomyłki trzeba nadać nowy alert.
+      </Sheet>
     </View>
   );
 }
@@ -131,9 +129,7 @@ export default function AlertsScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   content: { padding: 16, gap: 12 },
-  card: { padding: 16, borderRadius: radius.lg, gap: 8, elevation: 1 },
-  active: { borderWidth: 1 },
+  section: { marginVertical: -12 },
   label: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  cancel: { alignSelf: 'flex-start', borderRadius: radius.full },
-  actions: { padding: 16 },
+  cancel: { alignSelf: 'flex-start', marginLeft: -12 },
 });

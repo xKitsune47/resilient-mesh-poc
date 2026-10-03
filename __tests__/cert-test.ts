@@ -4,7 +4,7 @@ import * as ca from '../scripts/authority-ca';
 import {
   certSigningInput,
   identityQr,
-  nodeIdFromIdentityQr,
+  parseIdentityQr,
   serializeCertBody,
   TrustAnchors,
   verifyCert,
@@ -146,7 +146,7 @@ describe('authority certificates', () => {
 
 describe('identity QR', () => {
   it('round-trips a signing key to its node id', () => {
-    expect(nodeIdFromIdentityQr(identityQr(toBase64(official.sign.publicKey)))).toBe(official.nodeId);
+    expect(parseIdentityQr(identityQr(toBase64(official.sign.publicKey)))?.nodeId).toBe(official.nodeId);
   });
 
   it('accepts nothing but the exact format', () => {
@@ -163,7 +163,7 @@ describe('identity QR', () => {
       undefined,
       7,
     ]) {
-      expect(nodeIdFromIdentityQr(junk)).toBeNull();
+      expect(parseIdentityQr(junk)).toBeNull();
     }
   });
 });

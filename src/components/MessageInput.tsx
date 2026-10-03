@@ -1,17 +1,22 @@
 import { useState } from 'react';
 import { StyleSheet, TextInput, View } from 'react-native';
-import { IconButton, Text, useTheme } from 'react-native-paper';
+import { Icon, Text } from 'react-native-paper';
 
 import { MAX_MESSAGE_LENGTH } from '../services/mesh/MeshService';
-import { radius } from '../theme';
+import { size, type, useAppTheme } from '../theme';
+import { IconButton } from './ui/IconButton';
 
 interface Props {
   onSend: (text: string) => Promise<boolean>;
   disabled?: boolean;
 }
 
+/**
+ * Chat composer bar (DESIGN.md → Message input): a filled pill field that grows with the text and
+ * a round send button. Near the length limit a counter appears; past it sending is blocked.
+ */
 export function MessageInput({ onSend, disabled }: Props) {
-  const theme = useTheme();
+  const { colors } = useAppTheme();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const remaining = MAX_MESSAGE_LENGTH - text.length;
@@ -28,35 +33,31 @@ export function MessageInput({ onSend, disabled }: Props) {
   };
 
   return (
-    <View style={[styles.wrap, { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.outlineVariant }]}>
-      <View style={[styles.field, { backgroundColor: theme.colors.surface, borderColor: theme.colors.outlineVariant }]}>
+    <View style={[styles.wrap, { backgroundColor: colors.surface, borderTopColor: colors.outlineVariant }]}>
+      <View style={[styles.field, { backgroundColor: colors.surfaceVariant }]}>
         <TextInput
           value={text}
           onChangeText={setText}
           placeholder="Wiadomość"
-          placeholderTextColor={theme.colors.onSurfaceVariant}
-          style={[styles.input, { color: theme.colors.onSurface }]}
+          placeholderTextColor={colors.onSurfaceVariant}
+          style={[styles.input, { color: colors.onSurface }]}
           multiline
           maxLength={MAX_MESSAGE_LENGTH + 50}
           accessibilityLabel="Treść wiadomości"
         />
         {remaining < 60 && (
-          <Text variant="labelSmall" style={{ color: remaining < 0 ? theme.colors.error : theme.colors.onSurfaceVariant }}>
-            {remaining}
-          </Text>
+          <View style={styles.counter}>
+            {remaining < 0 && <Icon source="alert-circle-outline" size={16} color={colors.errorText} />}
+            <Text
+              variant="labelMedium"
+              style={[styles.count, { color: remaining < 0 ? colors.onSurface : colors.onSurfaceVariant }]}
+            >
+              {remaining}
+            </Text>
+          </View>
         )}
       </View>
-      <IconButton
-        icon="send"
-        mode="contained"
-        size={22}
-        containerColor={theme.colors.primary}
-        iconColor={theme.colors.onPrimary}
-        style={styles.send}
-        disabled={!canSend}
-        onPress={send}
-        accessibilityLabel="Wyślij"
-      />
+      <IconButton variant="filled" icon="send-outline" disabled={!canSend} onPress={send} accessibilityLabel="Wyślij" />
     </View>
   );
 }
@@ -74,11 +75,12 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 22,
-    borderWidth: 1,
+    gap: 8,
+    borderRadius: size.control / 2,
     paddingHorizontal: 16,
-    minHeight: 44,
+    minHeight: size.control,
   },
-  input: { flex: 1, fontSize: 16, maxHeight: 120, paddingVertical: 8 },
-  send: { width: 44, height: 44, margin: 0, borderRadius: radius.full },
+  input: { flex: 1, ...type.bodyLg, maxHeight: 120, paddingVertical: 8 },
+  counter: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  count: { fontVariant: ['tabular-nums'] },
 });

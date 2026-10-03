@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useColorScheme } from 'react-native';
 import { PaperProvider } from 'react-native-paper';
 
+import { NavBar } from '../components/ui/NavBar';
 import { useMeshLifecycle } from '../hooks/useMeshLifecycle';
 import RecoveryScreen from '../screens/RecoveryScreen';
 import { useAppearanceStore } from '../store/appearanceStore';
@@ -54,12 +55,22 @@ export default function RootLayout() {
       ) : (
         <Stack
           screenOptions={{
-            headerStyle: { backgroundColor: theme.colors.background },
-            headerTintColor: theme.colors.primary,
-            headerTitleAlign: 'center',
-            headerTitleStyle: { fontSize: 17, fontWeight: '600' },
+            // One header for every pushed screen. A screen can still inject a custom middle and a
+            // right-hand action through `headerTitle` / `headerRight` (the chat does).
+            header: ({ options, back, navigation }) => (
+              <NavBar
+                title={typeof options.headerTitle === 'string' ? options.headerTitle : options.title}
+                onBack={back ? navigation.goBack : undefined}
+                center={
+                  typeof options.headerTitle === 'function'
+                    ? options.headerTitle({ children: options.title ?? '' })
+                    : undefined
+                }
+                right={options.headerRight?.({ canGoBack: !!back })}
+              />
+            ),
+            animation: 'slide_from_right',
             contentStyle: { backgroundColor: theme.colors.background },
-            headerShadowVisible: false,
           }}
         >
           <Stack.Protected guard={!granted}>
@@ -72,7 +83,10 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="chat/[id]" options={{ title: 'Czat' }} />
             <Stack.Screen name="alerts" options={{ title: 'Komunikaty urzędowe' }} />
-            <Stack.Screen name="compose-alert" options={{ title: 'Nowy alert', presentation: 'modal' }} />
+            <Stack.Screen
+              name="compose-alert"
+              options={{ title: 'Nowy alert', presentation: 'modal', animation: 'slide_from_bottom' }}
+            />
             <Stack.Screen name="security" options={{ title: 'Bezpieczeństwo' }} />
             <Stack.Screen name="my-key" options={{ title: 'Mój klucz' }} />
             <Stack.Screen name="verify/[id]" options={{ title: 'Weryfikacja klucza' }} />

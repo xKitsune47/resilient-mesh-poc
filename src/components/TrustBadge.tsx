@@ -1,8 +1,8 @@
 import { StyleSheet, View } from 'react-native';
-import { Icon, Text, useTheme } from 'react-native-paper';
+import { Icon, Text } from 'react-native-paper';
 
 import type { TrustLevel } from '../store/contactsStore';
-import { radius } from '../theme';
+import { radius, useAppTheme } from '../theme';
 
 const COPY: Record<TrustLevel, { icon: string; label: string }> = {
   official: { icon: 'shield-star-outline', label: 'Konto urzędowe' },
@@ -16,7 +16,7 @@ const COPY: Record<TrustLevel, { icon: string; label: string }> = {
  * a nick alone never earns a badge.
  */
 export function TrustBadge({ level, compact }: { level: TrustLevel; compact?: boolean }) {
-  const theme = useTheme();
+  const theme = useAppTheme();
   const { icon, label } = COPY[level];
   const colors =
     level === 'official'
@@ -28,14 +28,14 @@ export function TrustBadge({ level, compact }: { level: TrustLevel; compact?: bo
   if (compact) {
     return (
       <View accessibilityLabel={label} style={[styles.dot, { backgroundColor: colors.bg }]}>
-        <Icon source={icon} size={14} color={colors.fg} />
+        <Icon source={icon} size={16} color={colors.fg} />
       </View>
     );
   }
   return (
     <View style={[styles.pill, { backgroundColor: colors.bg }]}>
-      <Icon source={icon} size={14} color={colors.fg} />
-      <Text variant="labelSmall" style={{ color: colors.fg }}>
+      <Icon source={icon} size={16} color={colors.fg} />
+      <Text variant="labelMedium" style={{ color: colors.fg }}>
         {label}
       </Text>
     </View>
@@ -48,9 +48,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: 4,
-    paddingHorizontal: 8,
-    height: 20,
+    paddingHorizontal: 10,
+    height: 24,
     borderRadius: radius.full,
   },
-  dot: { width: 20, height: 20, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center' },
+  dot: { width: 24, height: 24, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center' },
 });

@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
-import { Button, Dialog, Icon, Portal, Surface, Text, useTheme } from 'react-native-paper';
+import { Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { PrimaryButton } from '../components/PrimaryButton';
+import { AppButton, BottomActions, IconTile, Notice, Sheet } from '../components/ui';
 import { resetDatabase } from '../services/storage/db';
 import { useIdentityStore } from '../store/identityStore';
 import { useMeshStore } from '../store/meshStore';
-import { radius } from '../theme';
+import { useAppTheme } from '../theme';
 
 interface Props {
   /** 'identity': the key seed cannot be read; 'database': the database key is gone or wrong. */
@@ -40,7 +40,7 @@ const COPY = {
  * silently: replacing an identity or deleting the database is the user's explicit decision.
  */
 export default function RecoveryScreen({ kind }: Props) {
-  const theme = useTheme();
+  const theme = useAppTheme();
   const copy = COPY[kind];
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -66,51 +66,34 @@ export default function RecoveryScreen({ kind }: Props) {
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.colors.background }]}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.hero}>
-          <Icon source="shield-alert-outline" size={64} color={theme.colors.error} />
-          <Text variant="headlineLarge" style={styles.center}>
-            {copy.title}
-          </Text>
-          <Text variant="bodyLarge" style={[styles.center, { color: theme.colors.onSurfaceVariant }]}>
+          <IconTile size={64} tone="danger" icon="shield-alert-outline" />
+          <Text variant="headlineLarge">{copy.title}</Text>
+          <Text variant="bodyLarge" style={{ color: theme.colors.onSurfaceVariant }}>
             {copy.body}
           </Text>
         </View>
-        <Surface style={[styles.alert, { backgroundColor: theme.colors.errorContainer }]} elevation={0}>
-          <Icon source="alert" size={22} color={theme.colors.onErrorContainer} />
-          <Text variant="bodyMedium" style={{ color: theme.colors.onErrorContainer, flex: 1 }}>
-            {copy.consequence}
-          </Text>
-        </Surface>
+        <Notice tone="error" icon="alert-outline">
+          {copy.consequence}
+        </Notice>
         {failed && (
-          <Text variant="bodyMedium" style={{ color: theme.colors.error }}>
+          <Notice tone="error" icon="alert-circle-outline">
             Nie udało się. Sprawdź, czy telefon ma ustawioną blokadę ekranu, i spróbuj ponownie.
-          </Text>
+          </Notice>
         )}
       </ScrollView>
-      <View style={styles.actions}>
-        <PrimaryButton
-          buttonColor={theme.colors.error}
-          textColor={theme.colors.onError}
-          onPress={() => setConfirm(true)}
-          loading={busy}
-          disabled={busy}
-        >
+      <BottomActions safeArea={false}>
+        <AppButton variant="destructive" onPress={() => setConfirm(true)} loading={busy} disabled={busy}>
           {copy.action}
-        </PrimaryButton>
-      </View>
-      <Portal>
-        <Dialog visible={confirm} onDismiss={() => setConfirm(false)}>
-          <Dialog.Title>Na pewno?</Dialog.Title>
-          <Dialog.Content>
-            <Text>{copy.consequence}</Text>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setConfirm(false)}>Anuluj</Button>
-            <Button textColor={theme.colors.error} onPress={reset}>
-              {kind === 'identity' ? 'Utwórz nową' : 'Usuń'}
-            </Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
+        </AppButton>
+      </BottomActions>
+      <Sheet
+        visible={confirm}
+        onDismiss={() => setConfirm(false)}
+        title="Na pewno?"
+        primary={{ label: kind === 'identity' ? 'Utwórz nową' : 'Usuń', destructive: true, onPress: reset }}
+      >
+        {copy.consequence}
+      </Sheet>
     </SafeAreaView>
   );
 }
@@ -118,8 +101,5 @@ export default function RecoveryScreen({ kind }: Props) {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   content: { padding: 16, gap: 16 },
-  hero: { alignItems: 'center', gap: 12, marginVertical: 24 },
-  center: { textAlign: 'center' },
-  alert: { flexDirection: 'row', gap: 12, padding: 16, borderRadius: radius.lg },
-  actions: { padding: 16 },
+  hero: { alignItems: 'flex-start', gap: 12, marginTop: 24 },
 });

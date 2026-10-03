@@ -1,7 +1,7 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Pressable, StyleSheet, View } from 'react-native';
-import { Icon, IconButton, Snackbar, Text, useTheme } from 'react-native-paper';
+import { FlatList, KeyboardAvoidingView, StyleSheet, View } from 'react-native';
+import { Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -10,18 +10,23 @@ import { Avatar } from '../components/Avatar';
 import { MessageBubble } from '../components/MessageBubble';
 import { MessageInput } from '../components/MessageInput';
 import { TrustBadge } from '../components/TrustBadge';
+import { IconButton, Notice } from '../components/ui';
 import { MeshService } from '../services/mesh/MeshService';
 import { useChatStore } from '../store/chatStore';
 import { authorityName, trustLevel, useContactsStore } from '../store/contactsStore';
 import { useMeshStore } from '../store/meshStore';
 import type { ChatMessage } from '../store/types';
-import { radius } from '../theme';
+import { radius, statusColors, useAppTheme, type } from '../theme';
 import { nickSkeleton } from '../utils/nick';
 
 const EMPTY: ChatMessage[] = [];
 
+/** Consecutive messages of one sender form a run: tighter spacing and a single tail on the newest. */
+const sameRun = (a: ChatMessage, b: ChatMessage | undefined) =>
+  !!b && a.direction === b.direction && a.senderNick === b.senderNick && a.authority === b.authority;
+
 export default function ChatScreen() {
-  const theme = useTheme();
+  const theme = useAppTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const conversation = useChatStore((s) => s.conversations.find((c) => c.id === id));
   const messages = useChatStore((s) => s.messages[id] ?? EMPTY);
@@ -29,6 +34,13 @@ export default function ChatScreen() {
   const node = useMeshStore((s) => (peerId ? s.nodes.find((n) => n.nodeId === peerId) : undefined));
   const trust = useContactsStore(useShallow((s) => ({ contacts: s.contacts, authorities: s.authorities })));
   const [snack, setSnack] = useState<string | null>(null);
+
+  // The send-failure notice above the composer goes away on its own.
+  useEffect(() => {
+    if (!snack) return;
+    const timer = setTimeout(() => setSnack(null), 3000);
+    return () => clearTimeout(timer);
+  }, [snack]);
 
   useEffect(() => {
     if (!id) return;
@@ -81,64 +93,80 @@ export default function ChatScreen() {
   const retry = useCallback((messageId: string) => void MeshService.resend(messageId), []);
 
   const renderItem = useCallback(
-    ({ item }: { item: ChatMessage }) => <MessageBubble message={item} onRetry={retry} />,
-    [retry]
+    ({ item, index }: { item: ChatMessage; index: number }) => (
+      // The list is inverted: index + 1 is the older neighbour, index - 1 the newer one.
+      <MessageBubble
+        message={item}
+        onRetry={retry}
+        grouped={sameRun(item, reversed[index + 1])}
+        tail={!sameRun(item, reversed[index - 1])}
+      />
+    ),
+    [retry, reversed]
   );
 
   const verify = () => peerId && router.push({ pathname: '/verify/[id]', params: { id: peerId } });
 
   // Security notice at the start of the conversation (the list is inverted: footer = top).
   const notice = (
-    <Pressable
+    <Notice
+      tone={lookalike ? 'error' : 'neutral'}
+      strong={lookalike}
+      icon={lookalike ? 'alert' : 'lock-outline'}
+      footer={<TrustBadge level={level} />}
       onPress={verify}
-      accessibilityRole="button"
-      style={[styles.notice, { backgroundColor: lookalike ? theme.colors.errorContainer : theme.colors.surfaceVariant }]}
+      style={styles.notice}
     >
-      <Icon
-        source={lookalike ? 'alert' : 'lock-outline'}
-        size={18}
-        color={lookalike ? theme.colors.onErrorContainer : theme.colors.onSurfaceVariant}
-      />
-      <View style={styles.flex}>
-        <Text
-          variant="bodyMedium"
-          style={{ color: lookalike ? theme.colors.onErrorContainer : theme.colors.onSurfaceVariant }}
-        >
-          {lookalike
-            ? 'Uwaga: ktoś o tej samej nazwie jest na liście Twoich zweryfikowanych kontaktów, ale to jest inne urządzenie. Sprawdź klucz, zanim zaufasz tej rozmowie.'
-            : office
-              ? `Rozmowa szyfrowana end-to-end. Nadawca ma certyfikat konta urzędowego: ${office}.`
-              : level === 'verified'
-                ? 'Rozmowa szyfrowana end-to-end. Klucz tej osoby został przez Ciebie zweryfikowany.'
-                : 'Rozmowa szyfrowana end-to-end. Klucz tej osoby nie jest zweryfikowany – dotknij, aby sprawdzić, z kim rozmawiasz.'}
+      {lookalike ? (
+        // One warning, split in source only so that its first sentence can be set heavier.
+        <Text variant="bodyMedium" style={{ color: theme.colors.onErrorContainer }}>
+          <Text variant="titleMedium" style={{ color: theme.colors.onErrorContainer }}>
+            {'Uwaga: ktoś o tej samej nazwie jest na liście Twoich zweryfikowanych kontaktów, ale to jest inne urządzenie.'}
+          </Text>
+          <Text variant="bodyMedium" style={{ color: theme.colors.onErrorContainer }}>
+            {' Sprawdź klucz, zanim zaufasz tej rozmowie.'}
+          </Text>
         </Text>
-        <TrustBadge level={level} />
-      </View>
-    </Pressable>
+      ) : office ? (
+        `Rozmowa szyfrowana end-to-end. Nadawca ma certyfikat konta urzędowego: ${office}.`
+      ) : level === 'verified' ? (
+        'Rozmowa szyfrowana end-to-end. Klucz tej osoby został zweryfikowany osobiście.'
+      ) : (
+        'Rozmowa szyfrowana end-to-end. Klucz tej osoby nie jest zweryfikowany – dotknij, aby sprawdzić, z kim rozmawiasz.'
+      )}
+    </Notice>
   );
 
   return (
-    <SafeAreaView edges={['bottom']} style={[styles.flex, { backgroundColor: theme.colors.background }]}>
+    <SafeAreaView edges={['bottom']} style={[styles.flex, { backgroundColor: theme.colors.surface }]}>
       <Stack.Screen
         options={{
-          headerTitleAlign: 'left',
           headerTitle: () => (
             <View style={styles.header}>
-              <Avatar id={id} label={title} size={36} icon={office ? 'bank-outline' : undefined} />
+              <Avatar id={id} label={title} size={40} icon={office ? 'bank-outline' : undefined} />
               <View style={styles.flex}>
-                <Text variant="titleMedium" numberOfLines={1} style={{ color: theme.colors.primary }}>
+                <Text variant="titleMedium" numberOfLines={1} style={{ color: theme.colors.onSurface }}>
                   {title}
                 </Text>
-                <Text variant="labelSmall" numberOfLines={1} style={{ color: theme.colors.onSurfaceVariant }}>
-                  {subtitle}
-                </Text>
+                <View style={styles.reach}>
+                  <View
+                    style={[styles.dot, { backgroundColor: node ? statusColors.connected : statusColors.offline }]}
+                  />
+                  <Text
+                    variant="labelMedium"
+                    numberOfLines={2}
+                    style={[styles.flex, { color: theme.colors.onSurfaceVariant }]}
+                  >
+                    {subtitle}
+                  </Text>
+                </View>
               </View>
             </View>
           ),
           headerRight: () => (
             <IconButton
               icon={level === 'unverified' ? 'shield-alert-outline' : 'shield-check-outline'}
-              iconColor={theme.colors.primary}
+              color={theme.colors.primary}
               accessibilityLabel="Weryfikacja klucza rozmówcy"
               onPress={verify}
             />
@@ -146,7 +174,7 @@ export default function ChatScreen() {
         }}
       />
       <AlertBanner />
-      <KeyboardAvoidingView style={styles.flex} behavior="height">
+      <KeyboardAvoidingView style={[styles.flex, { backgroundColor: theme.colors.background }]} behavior="height">
         <FlatList
           data={reversed}
           inverted
@@ -155,25 +183,24 @@ export default function ChatScreen() {
           contentContainerStyle={styles.list}
           ListFooterComponent={notice}
         />
+        {!!snack && (
+          <Notice tone="error" icon="alert-circle-outline" live style={styles.snack}>
+            {snack}
+          </Notice>
+        )}
         <MessageInput onSend={send} disabled={!conversation} />
       </KeyboardAvoidingView>
-      <Snackbar visible={!!snack} onDismiss={() => setSnack(null)} duration={3000}>
-        {snack}
-      </Snackbar>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, marginRight: 16 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  reach: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  // Sits on the first line of the reach text, also when that text wraps to a second line.
+  dot: { width: 8, height: 8, borderRadius: radius.full, marginTop: (type.labelMd.lineHeight - 8) / 2 },
   list: { paddingVertical: 8, flexGrow: 1 },
-  notice: {
-    flexDirection: 'row',
-    gap: 8,
-    marginHorizontal: 12,
-    marginVertical: 8,
-    padding: 12,
-    borderRadius: radius.md,
-  },
+  notice: { marginHorizontal: 12, marginVertical: 8 },
+  snack: { marginHorizontal: 12, marginBottom: 8 },
 });

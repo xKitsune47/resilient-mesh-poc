@@ -1,8 +1,10 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
-import { Icon, Text, useTheme } from 'react-native-paper';
+import { Icon, Text } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Card, type IconName, SectionHeader, StatusDisc, Tag } from '../components/ui';
 import { TRUST_ANCHORS } from '../services/crypto/trustAnchors';
 import { CLOCK_SKEW_WARN_MS } from '../services/mesh/MeshRouter';
 import { hasDeviceLock } from '../services/security/deviceLock';
@@ -11,7 +13,7 @@ import { useChatStore } from '../store/chatStore';
 import { useContactsStore } from '../store/contactsStore';
 import { selectIsAuthority, useIdentityStore } from '../store/identityStore';
 import { useMeshStore } from '../store/meshStore';
-import { radius, statusColors } from '../theme';
+import { useAppTheme } from '../theme';
 import { formatDate } from '../utils/time';
 
 type State = 'on' | 'warning' | 'unknown';
@@ -22,10 +24,10 @@ interface Item {
   detail: string;
 }
 
-const STATE_UI: Record<State, { icon: string; color: string; label: string }> = {
-  on: { icon: 'check-circle-outline', color: statusColors.connected, label: 'Działa' },
-  warning: { icon: 'alert-outline', color: statusColors.searching, label: 'Uwaga' },
-  unknown: { icon: 'help-circle-outline', color: statusColors.offline, label: 'Nieznane' },
+const STATE_UI: Record<State, { status: 'connected' | 'searching' | 'offline'; icon: IconName; label: string }> = {
+  on: { status: 'connected', icon: 'check', label: 'Działa' },
+  warning: { status: 'searching', icon: 'exclamation', label: 'Uwaga' },
+  unknown: { status: 'offline', icon: 'help', label: 'Nieznane' },
 };
 
 const LIMITS = [
@@ -44,7 +46,8 @@ const LIMITS = [
  * list – and, just as prominently, what the app does not protect against.
  */
 export default function SecurityScreen() {
-  const theme = useTheme();
+  const theme = useAppTheme();
+  const insets = useSafeAreaInsets();
   const identity = useIdentityStore();
   const clockSkewMs = useMeshStore((s) => s.clockSkewMs);
   const conversations = useChatStore((s) => s.conversations);
@@ -141,50 +144,49 @@ export default function SecurityScreen() {
   }
 
   return (
-    <ScrollView style={{ backgroundColor: theme.colors.background }} contentContainerStyle={styles.content}>
-      <Text variant="titleLarge">Co Cię chroni</Text>
+    <ScrollView
+      style={{ backgroundColor: theme.colors.background }}
+      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+    >
+      <SectionHeader first title="Co Cię chroni" />
       {items.map((item) => {
         const ui = STATE_UI[item.state];
         return (
-          <View key={item.title} style={[styles.card, { backgroundColor: theme.colors.surface }]}>
+          <Card key={item.title} style={styles.card}>
             <View style={styles.head}>
-              <Icon source={ui.icon} size={22} color={ui.color} />
+              <StatusDisc status={ui.status} icon={ui.icon} />
               <Text variant="titleMedium" style={styles.title}>
                 {item.title}
               </Text>
-              <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-                {ui.label}
-              </Text>
+              <Tag label={ui.label} />
             </View>
             <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
               {item.detail}
             </Text>
-          </View>
+          </Card>
         );
       })}
 
-      <Text variant="titleLarge" style={styles.section}>
-        Czego aplikacja nie chroni
-      </Text>
-      <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
+      <SectionHeader title="Czego aplikacja nie chroni" />
+      <Card style={styles.limits}>
         {LIMITS.map((limit) => (
           <View key={limit} style={styles.limit}>
-            <Icon source="minus-circle-outline" size={18} color={theme.colors.onSurfaceVariant} />
-            <Text variant="bodyMedium" style={styles.title}>
+            <Icon source="minus-circle-outline" size={20} color={theme.colors.onSurfaceVariant} />
+            <Text variant="bodyMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
               {limit}
             </Text>
           </View>
         ))}
-      </View>
+      </Card>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { padding: 16, gap: 8, paddingBottom: 32 },
-  section: { marginTop: 16, marginBottom: 4 },
-  card: { padding: 16, borderRadius: radius.lg, gap: 8, elevation: 1 },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  content: { padding: 16 },
+  card: { marginBottom: 8 },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   title: { flex: 1 },
-  limit: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  limits: { gap: 12 },
+  limit: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
 });

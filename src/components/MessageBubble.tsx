@@ -1,14 +1,17 @@
 import { memo } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
-import { Icon, Text, useTheme } from 'react-native-paper';
+import { StyleSheet, View } from 'react-native';
+import { Icon, Text } from 'react-native-paper';
 
 import type { ChatMessage } from '../store/types';
-import { radius, statusColors } from '../theme';
+import { radius, useAppTheme } from '../theme';
 import { formatTime } from '../utils/time';
+import { Tappable } from './ui/Tappable';
 
 interface Props {
   message: ChatMessage;
   onRetry?: (id: string) => void;
+  tail?: boolean; // last bubble of a run: the corner next to the sender's edge is cut to 4px
+  grouped?: boolean; // follows a bubble from the same sender: sits closer to it
 }
 
 const STATUS_ICON: Record<ChatMessage['status'], { icon: string; label: string }> = {
@@ -18,21 +21,28 @@ const STATUS_ICON: Record<ChatMessage['status'], { icon: string; label: string }
   failed: { icon: 'alert-circle-outline', label: 'Nieudana – dotknij, aby ponowić' },
 };
 
-function MessageBubbleImpl({ message, onRetry }: Props) {
-  const theme = useTheme();
+/**
+ * One chat message (DESIGN.md → Message bubble). Flat – no shadow inside the inverted list. The
+ * 1px error border is reserved for the two states that carry meaning: a message from an authority
+ * certificate holder ("PILNE · …") and an own message that was not delivered (tap to retry).
+ */
+function MessageBubbleImpl({ message, onRetry, tail = true, grouped = false }: Props) {
+  const { colors } = useAppTheme();
   const mine = message.direction === 'out';
   const status = STATUS_ICON[message.status];
   const failed = mine && message.status === 'failed';
   // Set only when the sender held a valid authority certificate – such messages are always urgent.
   const official = message.authority;
 
-  const bubbleColor = mine ? theme.colors.primaryContainer : theme.colors.surface;
-  const textColor = mine ? theme.colors.onPrimaryContainer : theme.colors.onSurface;
-  const metaColor = theme.colors.onSurfaceVariant;
+  const bubbleColor = mine ? colors.primaryContainer : colors.surface;
+  const textColor = mine ? colors.onPrimaryContainer : colors.onSurface;
+  const metaColor = colors.onSurfaceVariant;
+  // Error-coloured text is too faint on the primary container: there only the icon and border are red.
+  const noteColor = mine ? colors.onPrimaryContainer : colors.errorText;
 
   return (
-    <View style={[styles.row, mine ? styles.rowMine : styles.rowTheirs]}>
-      <Pressable
+    <View style={[styles.row, grouped && styles.rowGrouped, mine ? styles.rowMine : styles.rowTheirs]}>
+      <Tappable
         disabled={!failed}
         onPress={() => onRetry?.(message.id)}
         accessibilityLabel={
@@ -46,15 +56,16 @@ function MessageBubbleImpl({ message, onRetry }: Props) {
           styles.bubble,
           {
             backgroundColor: bubbleColor,
-            borderColor: failed ? statusColors.error : official ? theme.colors.error : 'transparent',
+            borderColor: failed || official ? colors.errorText : 'transparent',
           },
-          mine ? styles.bubbleMine : styles.bubbleTheirs,
+          tail && (mine ? styles.tailMine : styles.tailTheirs),
         ]}
+        pressedStyle={styles.pressed}
       >
         {official && (
           <View style={styles.official}>
-            <Icon source="alert-octagon-outline" size={15} color={theme.colors.error} />
-            <Text variant="labelMedium" numberOfLines={2} style={{ color: theme.colors.error, flexShrink: 1 }}>
+            <Icon source="alert-octagon-outline" size={16} color={colors.errorText} />
+            <Text variant="labelMedium" numberOfLines={2} style={{ color: noteColor, flexShrink: 1 }}>
               PILNE · {official}
             </Text>
           </View>
@@ -75,12 +86,12 @@ function MessageBubbleImpl({ message, onRetry }: Props) {
             <View style={{ marginLeft: 3 }}>
               <Icon
                 source={status.icon}
-                size={15}
+                size={16}
                 color={
                   message.status === 'failed'
-                    ? statusColors.error
+                    ? colors.errorText
                     : message.status === 'delivered'
-                      ? theme.colors.primary
+                      ? colors.primary
                       : metaColor
                 }
               />
@@ -88,11 +99,11 @@ function MessageBubbleImpl({ message, onRetry }: Props) {
           )}
         </View>
         {failed && (
-          <Text variant="labelSmall" style={{ color: statusColors.error, marginTop: 2 }}>
+          <Text variant="labelMedium" style={{ color: noteColor, marginTop: 2 }}>
             Nie dostarczono · dotknij, aby ponowić
           </Text>
         )}
-      </Pressable>
+      </Tappable>
     </View>
   );
 }
@@ -100,7 +111,8 @@ function MessageBubbleImpl({ message, onRetry }: Props) {
 export const MessageBubble = memo(MessageBubbleImpl);
 
 const styles = StyleSheet.create({
-  row: { paddingHorizontal: 12, marginVertical: 2, flexDirection: 'row' },
+  row: { paddingHorizontal: 12, marginTop: 8, flexDirection: 'row' },
+  rowGrouped: { marginTop: 2 },
   rowMine: { justifyContent: 'flex-end' },
   rowTheirs: { justifyContent: 'flex-start' },
   bubble: {
@@ -110,10 +122,10 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     borderRadius: radius.lg,
     borderWidth: 1,
-    elevation: 1,
   },
-  bubbleMine: { borderBottomRightRadius: radius.xs },
-  bubbleTheirs: { borderBottomLeftRadius: radius.xs },
+  tailMine: { borderBottomRightRadius: radius.xs },
+  tailTheirs: { borderBottomLeftRadius: radius.xs },
+  pressed: { opacity: 0.88 },
   official: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
   meta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 2 },
 });

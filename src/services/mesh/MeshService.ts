@@ -6,15 +6,17 @@ import { useChatStore } from '../../store/chatStore';
 import { authorityName, useContactsStore } from '../../store/contactsStore';
 import { selectIsAuthority, useIdentityStore } from '../../store/identityStore';
 import { useMeshStore } from '../../store/meshStore';
+import { useVerifyStore } from '../../store/verifyStore';
 import { ChatMessage, Conversation, dmConversationId } from '../../store/types';
 import { TokenBucket } from '../../utils/RateLimiter';
+import { toBase64 } from '../../utils/bytes';
 import { createLogger } from '../../utils/logger';
 import { sanitizeLine, sanitizeNick } from '../../utils/nick';
-import { randomId } from '../../utils/random';
+import { randomBytes, randomId } from '../../utils/random';
 import { Link, LinkManager } from '../ble/LinkManager';
 import { peerAuthority } from '../crypto/authorities';
-import { AckPlain, isEnvelope, MessagePlain, SealedPayload } from '../crypto/box';
-import type { CertFailure } from '../crypto/cert';
+import { AckPlain, isEnvelope, MessagePlain, SealedPayload, VerifyPlain } from '../crypto/box';
+import { type CertFailure, parseIdentityQr, VERIFY_TOKEN_BYTES } from '../crypto/cert';
 import { getPeerBoxKey, openJson, rememberPeerKey, sealJson } from '../crypto/e2e';
 import { getIdentityKeys, signBytes } from '../crypto/identity';
 import { confirmPresence, hasDeviceLock } from '../security/deviceLock';
@@ -34,6 +36,7 @@ import {
 } from './alertPolicy';
 import { AlertSink, MeshRouter } from './MeshRouter';
 import { AlertPayload, decodeJson, encodeJson, MeshPacket, PacketFlags, PacketType } from './packet';
+import { acceptProof, closeOffer, forgetAccepted, newOfferState, openOffer } from './verifyOffer';
 
 const log = createLogger('MeshService');
 
@@ -45,6 +48,8 @@ const RETRY_DELAYS_MS = [4_000, 10_000, 20_000];
 /** Clock skew tolerance for incoming timestamps. */
 const MAX_FUTURE_SKEW_MS = 60_000;
 const ALERT_PRUNE_INTERVAL_MS = 10 * 60_000;
+/** How long to wait for the acknowledgement of the last verification-proof transmission. */
+const PROOF_FINAL_WAIT_MS = 6_000;
 
 interface Outgoing {
   message: ChatMessage;
@@ -54,9 +59,24 @@ interface Outgoing {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+/** A verification proof on its way to the peer whose code was scanned. */
+interface PendingProof {
+  peerId: string;
+  attempt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  resolve: (confirmed: boolean) => void;
+}
+
 export type SendResult = { ok: true } | { ok: false; reason: 'empty' | 'too_long' | 'rate_limited'; retryInMs?: number };
 export type AlertResult = { ok: true } | { ok: false; reason: 'not_authority' | 'not_confirmed' | 'invalid' | 'offline' };
 export type InstallCertResult = { ok: true; name: string } | { ok: false; reason: CertFailure | 'no_device_lock' };
+/**
+ * Outcome of scanning a code on the verify screen. `confirmation` resolves true once the owner of
+ * the code confirmed it now sees this device as verified; null when the code carried no token.
+ */
+export type ScanResult =
+  | { result: 'not_a_key' | 'mismatch' }
+  | { result: 'match'; confirmation: Promise<boolean> | null };
 
 /**
  * Application layer: chat semantics on top of the mesh router.
@@ -71,6 +91,8 @@ class MeshServiceImpl {
   private links = new LinkManager();
   private router: MeshRouter | null = null;
   private outgoing = new Map<string, Outgoing>();
+  /** Verification proofs awaiting the acknowledgement of the peer, keyed by token. */
+  private proofs = new Map<string, PendingProof>();
   private sendLimiter = new TokenBucket(5, 1); // max burst 5, then 1 msg/s
   private unsubs: (() => void)[] = [];
   private appStateSub: { remove(): void } | null = null;
@@ -144,6 +166,12 @@ class MeshServiceImpl {
     if (this.pruneTimer) clearInterval(this.pruneTimer);
     this.outgoing.forEach((o) => o.timer && clearTimeout(o.timer));
     this.outgoing.clear();
+    this.proofs.forEach((p) => {
+      if (p.timer) clearTimeout(p.timer);
+      p.resolve(false);
+    });
+    this.proofs.clear();
+    useVerifyStore.getState().set({ machine: newOfferState(), outcome: null });
     this.router?.stop();
     this.router = null;
     await this.links.stop();
@@ -290,11 +318,138 @@ class MeshServiceImpl {
   // Trust: key verification and authority certificate
   // --------------------------------------------------------------------------------------
 
-  /** The user confirmed in person (QR / fingerprint) that this node id belongs to the peer. */
-  markVerified(nodeId: string) {
+  /** It was confirmed in person (QR / fingerprint) that this node id belongs to the peer. */
+  markVerified(nodeId: string, at = Date.now()) {
     const title = useChatStore.getState().conversations.find((c) => c.peerId === nodeId)?.title;
-    const nick = useContactsStore.getState().contacts[nodeId]?.nick || title || nodeId.slice(0, 8);
-    useContactsStore.getState().remember(nodeId, { verifiedAt: Date.now(), nick, boxKey: getPeerBoxKey(nodeId) });
+    const nick =
+      useContactsStore.getState().contacts[nodeId]?.nick ||
+      title ||
+      this.router?.getNode(nodeId)?.nick ||
+      nodeId.slice(0, 8);
+    useContactsStore.getState().remember(nodeId, { verifiedAt: at, nick, boxKey: getPeerBoxKey(nodeId) });
+  }
+
+  /** Undoes a verification (the user no longer vouches for this node id). */
+  clearVerification(nodeId: string) {
+    useContactsStore.getState().remember(nodeId, { verifiedAt: null });
+    // The decision is final: a late retry must not be acknowledged, a late conflict must not "restore" anything.
+    const { machine, outcome, set } = useVerifyStore.getState();
+    const next = { ...machine };
+    forgetAccepted(next, nodeId);
+    set({ machine: next, outcome: outcome?.peerId === nodeId ? null : outcome });
+  }
+
+  /**
+   * What the scanning phone does with a code read on the verify screen of the conversation with
+   * `peerId`. A matching key verifies the peer here; a one-time token in the code is sent back
+   * so that the owner of the code verifies this device too.
+   */
+  scanVerificationCode(peerId: string, text: string): ScanResult {
+    const scanned = parseIdentityQr(text);
+    if (!scanned) return { result: 'not_a_key' };
+    if (scanned.nodeId !== peerId) {
+      // Not the key of this conversation – somebody may sit between the two phones. The owner of
+      // the code must learn that a device it was not showing the code to has read it: the proof
+      // still goes out, and on its side that raises the conflict warning (see verifyOffer.ts).
+      if (scanned.token && scanned.nodeId !== useIdentityStore.getState().nodeId) {
+        void this.sendVerificationProof(scanned.nodeId, scanned.token);
+      }
+      return { result: 'mismatch' };
+    }
+    this.markVerified(peerId);
+    return { result: 'match', confirmation: scanned.token ? this.sendVerificationProof(peerId, scanned.token) : null };
+  }
+
+  /**
+   * Shows a one-time verification code for the conversation with `peerId` (see verifyOffer.ts):
+   * only that peer can use it. The code is rendered from the verify store.
+   */
+  openVerificationOffer(peerId: string) {
+    const { machine, outcome, set } = useVerifyStore.getState();
+    const next = { ...machine };
+    openOffer(next, peerId, toBase64(randomBytes(VERIFY_TOKEN_BYTES)), Date.now());
+    set({ machine: next, outcome: outcome?.peerId === peerId ? null : outcome });
+  }
+
+  /** Withdraws the code (hidden by the user, or the app left the screen). */
+  closeVerificationOffer() {
+    const machine = { ...useVerifyStore.getState().machine };
+    if (!machine.offer) return;
+    closeOffer(machine);
+    useVerifyStore.getState().set({ machine });
+  }
+
+  /**
+   * After scanning the code of a peer: tells the peer "I saw the token on your screen", so that
+   * the peer marks this device as verified too – one scan verifies both sides.
+   * @returns true once the peer acknowledged; false if it did not (unreachable, it refused the
+   *          token, a newer proof with the same token replaced this one, or the mesh stopped).
+   */
+  sendVerificationProof(peerId: string, token: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const previous = this.proofs.get(token);
+      if (previous) {
+        if (previous.timer) clearTimeout(previous.timer);
+        previous.resolve(false);
+      }
+      this.proofs.set(token, { peerId, attempt: 0, timer: null, resolve });
+      this.transmitProof(token);
+    });
+  }
+
+  private transmitProof(token: string) {
+    const proof = this.proofs.get(token);
+    if (!proof) return;
+    if (proof.attempt > RETRY_DELAYS_MS.length) {
+      this.proofs.delete(token);
+      proof.resolve(false);
+      return;
+    }
+    const me = useIdentityStore.getState().nodeId;
+    const plain: VerifyPlain = { y: 'v', id: token, from: me, to: proof.peerId };
+    const sealed = sealJson(proof.peerId, plain);
+    const flags = proof.attempt > 0 ? PacketFlags.ForceFlood : 0;
+    if (sealed) {
+      void this.router
+        ?.originate(PacketType.Chat, proof.peerId, encodeJson(sealed), { flags })
+        .catch((e) => log.warn('proof originate failed', e));
+    }
+    proof.timer = setTimeout(() => {
+      proof.attempt++;
+      this.transmitProof(token);
+    }, RETRY_DELAYS_MS[proof.attempt] ?? PROOF_FINAL_WAIT_MS);
+  }
+
+  /**
+   * A peer claims to have scanned the code on the screen of this device. Synchronous on purpose:
+   * the token is checked and spent in one step, so two proofs can never both use it.
+   */
+  private onVerificationProof(origin: string, token: string) {
+    const now = Date.now();
+    const contacts = useContactsStore.getState();
+    const machine = { ...useVerifyStore.getState().machine };
+    const result = acceptProof(machine, origin, token, now, contacts.contacts[origin]?.verifiedAt ?? null);
+    if (result.kind === 'ignored') return; // unknown or expired token – stay silent
+
+    if (result.kind === 'conflict') {
+      // The right code from the wrong device: it leaked, or this conversation is not with the
+      // person who scanned. Nothing is acknowledged, and what the code granted is undone – but
+      // only that: a verification the user made or removed by hand since then is left alone.
+      const { revoke } = result;
+      if (revoke && contacts.contacts[revoke.by]?.verifiedAt === revoke.grantedAt) {
+        contacts.remember(revoke.by, { verifiedAt: revoke.previousVerifiedAt });
+      }
+      useVerifyStore.getState().set({ machine, outcome: { kind: 'conflict', peerId: result.peerId, by: origin, at: now } });
+      return;
+    }
+
+    if (result.kind === 'verified') {
+      this.markVerified(origin, now);
+      useVerifyStore.getState().set({ machine, outcome: { kind: 'verified', peerId: result.peerId, by: origin, at: now } });
+    }
+    const ack: AckPlain = { y: 'a', id: token, from: useIdentityStore.getState().nodeId, to: origin };
+    const sealed = sealJson(origin, ack);
+    if (sealed) void this.router?.originate(PacketType.Ack, origin, encodeJson(sealed));
   }
 
   /**
@@ -482,6 +637,13 @@ class MeshServiceImpl {
     const me = useIdentityStore.getState().nodeId;
     const ack = openJson(packet.origin, decodeJson<SealedPayload>(packet.payload));
     if (!isEnvelope(ack, 'a', packet.origin, me)) return;
+    const proof = this.proofs.get(ack.id);
+    if (proof) {
+      if (proof.peerId !== packet.origin) return;
+      if (proof.timer) clearTimeout(proof.timer);
+      this.proofs.delete(ack.id);
+      return proof.resolve(true);
+    }
     const out = this.outgoing.get(ack.id);
     // Late ACK for a message we've given up on, or an ACK from someone who is not the recipient.
     if (!out || out.conversation.peerId !== packet.origin) return;
@@ -513,6 +675,7 @@ class MeshServiceImpl {
     const sealed = decodeJson<SealedPayload>(packet.payload);
     // Must be encrypted for us by the origin, and say so inside the ciphertext (see crypto/box).
     const chat = openJson(packet.origin, sealed);
+    if (isEnvelope(chat, 'v', packet.origin, me)) return this.onVerificationProof(packet.origin, chat.id);
     if (!isEnvelope(chat, 'm', packet.origin, me)) return;
     const text = chat.t.slice(0, MAX_MESSAGE_LENGTH);
     if (!text.trim()) return;
@@ -628,6 +791,8 @@ class MeshServiceImpl {
 
   private onAppState = (state: AppStateStatus) => {
     const background = state !== 'active';
+    // A code is only good while its owner is looking at it – not after switching to another app.
+    if (background) this.closeVerificationOffer();
     this.links.setBackground(background);
     this.router?.setAnnounceInterval(background ? ANNOUNCE_BACKGROUND_MS : ANNOUNCE_FOREGROUND_MS);
     if (!background) this.links.rescan();

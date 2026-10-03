@@ -39,8 +39,9 @@ Release APK: `npx expo run:android --variant release` albo EAS: `npx eas-cli@lat
 Kontrola jakości: `npm run typecheck`, `npm run lint`, `npm test`, `npx expo-doctor`.
 
 `npm test` (Jest) sprawdza warstwę protokołu bez telefonu: podpisy pakietów, szyfrowanie, certyfikaty,
-handshake, reguły alertów oraz router na symulowanych łączach (fałszerstwa, powtórzenia, rozchodzenie
-alertów). Radia BLE, magazynu kluczy i szyfrowania bazy nie da się sprawdzić inaczej niż na urządzeniach.
+handshake, reguły alertów, router na symulowanych łączach (fałszerstwa, powtórzenia, rozchodzenie
+alertów) oraz kilka kompletnych węzłów naraz (wiadomość przez przekaźnik, wzajemna weryfikacja jednym
+skanem i próby jej nadużycia, alert i wiadomość konta urzędowego). Radia BLE, magazynu kluczy i szyfrowania bazy nie da się sprawdzić inaczej niż na urządzeniach.
 
 > Po zmianie wtyczek w `app.json` (SQLCipher, aparat, SecureStore) potrzebny jest nowy `prebuild`
 > i nowy build – sam dev server nie wystarczy.
@@ -148,7 +149,8 @@ implementuje:
 - Limit: 4 łącza wychodzące i 7 łącznie (limit stosu BLE Androida). W tłumie powstaje więc
   częściowa siatka, a zasięg zapewnia relaying.
 - **Fragmentacja**: pakiet dzielony jest na ramki `[streamId][index][count][dane]` dopasowane do MTU
-  (wynegocjowane 517 B, domyślnie 23 B) i składany po drugiej stronie.
+  (wynegocjowane 517 B, domyślnie 23 B) i składany po drugiej stronie. Ramka ma najwyżej 512 B
+  niezależnie od MTU – tyle wynosi limit wartości atrybutu GATT, a Android 13+ odrzuca dłuższe.
 - **Reconnect**: po rozłączeniu węzeł wraca do kandydatów, a kolejne próby mają wykładniczy
   backoff (2 s → 60 s).
 
@@ -277,6 +279,7 @@ Poza modelem: zagłuszanie radiowe, przejęty system Android (root, malware), pr
 | Fałszywy „urząd” | status urzędowy wyłącznie z certyfikatu podpisanego kluczem głównym; nazwa urzędu z certyfikatu, nigdy z nicku |
 | Mylące nicki | trzy różne oznaczenia (konto urzędowe / klucz zweryfikowany / niezweryfikowany), ostrzeżenie przy nazwie zbieżnej ze zweryfikowanym kontaktem |
 | Podstawiony rozmówca przy pierwszym kontakcie | weryfikacja klucza kodem QR lub porównaniem odcisku na głos |
+| Podglądacz przy weryfikacji (zdjęcie kodu z ekranu) | jednorazowy kod przypisany do jednej rozmowy; ten sam kod z drugiego urządzenia = ostrzeżenie i cofnięcie |
 | Odczyt danych z przejętego telefonu | ziarno kluczy i klucz bazy w SecureStore (szyfrowane kluczem z Android Keystore), baza SQLCipher, backup Androida wyłączony |
 | Nadanie alertu z cudzego, odblokowanego telefonu | biometria lub kod blokady przed każdym alertem; certyfikat instaluje się tylko na telefonie z blokadą ekranu |
 
@@ -285,8 +288,26 @@ Poza modelem: zagłuszanie radiowe, przejęty system Android (root, malware), pr
 - Urządzenie ma jedno 32-bajtowe ziarno. Z niego powstaje para Ed25519 (podpisy) i para X25519
   (szyfrowanie). ID węzła to pierwsze 16 bajtów SHA-512 klucza podpisującego.
 - **Odcisk klucza** to pełne 128 bitów ID w 8 grupach po 4 znaki (Ustawienia → Mój klucz, razem z kodem QR).
-- W czacie ikona tarczy otwiera weryfikację: skan kodu QR rozmówcy oznacza kontakt jako zweryfikowany
-  tylko wtedy, gdy zeskanowany klucz daje ID tej rozmowy. Bez aparatu można porównać odciski na głos.
+- W czacie ikona tarczy otwiera weryfikację. **Wystarczy jeden skan, żeby zweryfikowali się oboje:**
+  jedna osoba wybiera „Pokaż mój kod”, druga skanuje.
+  - Skanujący ufa pokazującemu, bo zeskanowany klucz daje ID tej rozmowy.
+  - Pokazujący ufa skanującemu, bo kod zawiera jednorazowy token, a telefon skanującego odsyła go
+    zaszyfrowany. Token jest **przypisany do rozmowy, z której otwarto kod** – przyjmowany jest tylko
+    od tego jednego węzła, żyje 2 minuty, tylko w pamięci, i znika po wyjściu z aplikacji.
+  - Ten sam token od innego urządzenia oznacza, że ktoś podejrzał ekran albo rozmowa nie jest z osobą,
+    która stoi obok. Wtedy **ten kod nie weryfikuje nikogo na telefonie pokazującego**: to, co nadał
+    w ostatniej minucie, jest cofane (wcześniejsza, własna weryfikacja kontaktu zostaje), a na ekranie
+    weryfikacji tej rozmowy pojawia się ostrzeżenie z odciskiem obcego urządzenia. Skanujący zachowuje
+    to, co sam sprawdził aparatem.
+  - Żeby osoba stojąca obok zawsze zdążyła wywołać to ostrzeżenie, kod zostaje na ekranie jeszcze
+    przez chwilę po przyjęciu, a telefon skanujący wysyła dowód także wtedy, gdy klucz **nie** pasuje
+    do jego rozmowy (czyli gdy ktoś siedzi pośrodku). Wyścig z podglądaczem kończy się więc
+    ostrzeżeniem i powtórką, a nie fałszywą plakietką. Ceną jest to, że podglądacz może w ciągu minuty
+    unieważnić cudzą weryfikację tym kodem – wtedy obie osoby skanują ponownie.
+  - Kod z ekranu Ustawienia → Mój klucz to sam klucz publiczny (bez tokenu): jego skan weryfikuje
+    tylko jedną stronę. Tak samo porównanie odcisków na głos.
+  - Weryfikację można cofnąć na ekranie weryfikacji; cofnięcie jest ostateczne (spóźniony dowód ani
+    spóźniony konflikt już niczego nie zmienią).
 - Utrata kluczy (np. przeniesienie aplikacji na inny telefon) nigdy nie kończy się cichym
   wygenerowaniem nowej tożsamości – aplikacja pokazuje ekran odzyskiwania i czeka na decyzję użytkownika.
   To samo dotyczy klucza bazy danych.

@@ -1,13 +1,15 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, ToastAndroid } from 'react-native';
-import { Button, Icon, Surface, Text, TextInput, useTheme } from 'react-native-paper';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { Text } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PrimaryButton } from '../components/PrimaryButton';
 import { QrScanner } from '../components/QrScanner';
-import { nodeIdFromIdentityQr } from '../services/crypto/cert';
+import { AppButton, BottomActions, Field, Notice } from '../components/ui';
+import { parseIdentityQr } from '../services/crypto/cert';
 import { type InstallCertResult, MeshService } from '../services/mesh/MeshService';
-import { radius } from '../theme';
+import { useAppTheme } from '../theme';
 
 const FAILURES: Record<Exclude<InstallCertResult, { ok: true }>['reason'], string> = {
   format: 'To nie jest certyfikat Mesh Chat.',
@@ -25,90 +27,105 @@ const FAILURES: Record<Exclude<InstallCertResult, { ok: true }>['reason'], strin
  * The certificate comes only from the camera or the text field on this screen – never from a link.
  */
 export default function InstallCertScreen() {
-  const theme = useTheme();
+  const theme = useAppTheme();
+  const insets = useSafeAreaInsets();
   const [scanning, setScanning] = useState(true);
   const [scanKey, setScanKey] = useState(0);
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  /** Office name from the certificate once it was installed. */
+  const [installed, setInstalled] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const install = async (cert: string) => {
     setBusy(true);
     setError(null);
     const value = cert.trim();
-    const res = nodeIdFromIdentityQr(value)
+    const res = parseIdentityQr(value)
       ? null // someone's identity code, most likely the user's own "Mój klucz" screen
       : await MeshService.installCert(value);
     setBusy(false);
-    if (res?.ok) {
-      ToastAndroid.show(`Certyfikat zainstalowany: ${res.name}`, ToastAndroid.LONG);
-      return router.back();
-    }
-    setError(res ? FAILURES[res.reason] : 'To jest kod klucza, a nie certyfikat. Zeskanuj kod wydany przez operatora.');
     setScanning(false);
+    if (res?.ok) return setInstalled(res.name);
+    setError(res ? FAILURES[res.reason] : 'To jest kod klucza, a nie certyfikat. Zeskanuj kod wydany przez operatora.');
+  };
+
+  const scanAgain = () => {
+    setError(null);
+    setScanKey((k) => k + 1);
+    setScanning(true);
   };
 
   return (
-    <ScrollView
-      style={{ backgroundColor: theme.colors.background }}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-        Certyfikat konta urzędowego wydaje operator po sprawdzeniu Twojej tożsamości i klucza (Ustawienia → Mój klucz).
-        Zeskanuj kod QR z jego ekranu albo wklej certyfikat jako tekst.
-      </Text>
-
-      {scanning ? (
-        <QrScanner key={scanKey} onScan={(data) => void install(data)} />
-      ) : (
-        <PrimaryButton
-          icon="qrcode-scan"
-          onPress={() => {
-            setError(null);
-            setScanKey((k) => k + 1);
-            setScanning(true);
-          }}
-        >
-          Skanuj ponownie
-        </PrimaryButton>
-      )}
-
-      {error && (
-        <Surface style={[styles.result, { backgroundColor: theme.colors.errorContainer }]} elevation={0}>
-          <Icon source="alert" size={22} color={theme.colors.onErrorContainer} />
-          <Text variant="bodyMedium" style={{ color: theme.colors.onErrorContainer, flex: 1 }}>
-            {error}
-          </Text>
-        </Surface>
-      )}
-
-      <Text variant="titleMedium">Albo wklej tekst</Text>
-      <TextInput
-        mode="outlined"
-        outlineStyle={{ borderRadius: radius.md }}
-        placeholder="MC1:CERT:…"
-        value={text}
-        onChangeText={setText}
-        multiline
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
-      <Button
-        mode="contained-tonal"
-        onPress={() => void install(text)}
-        disabled={!text.trim() || busy}
-        loading={busy}
-        style={styles.paste}
+    <View style={[styles.screen, { backgroundColor: theme.colors.background }]}>
+      <ScrollView
+        // While the camera is live there is no footer, so the content clears the system bar itself.
+        contentContainerStyle={[styles.content, !installed && scanning && { paddingBottom: insets.bottom + 24 }]}
+        keyboardShouldPersistTaps="handled"
       >
-        Zainstaluj z tekstu
-      </Button>
-    </ScrollView>
+        {installed ? (
+          <Notice tone="success" icon="shield-star-outline">
+            Certyfikat zainstalowany: {installed}. To urządzenie jest teraz kontem urzędowym – Twoje wiadomości będą
+            oznaczane jako pilne, a w Ustawieniach możesz nadać alert do wszystkich.
+          </Notice>
+        ) : (
+          <>
+            <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+              Certyfikat konta urzędowego wydaje operator po sprawdzeniu Twojej tożsamości i klucza (Ustawienia → Mój
+              klucz). Zeskanuj kod QR z jego ekranu albo wklej certyfikat jako tekst.
+            </Text>
+
+            {scanning && <QrScanner key={scanKey} onScan={(data) => void install(data)} />}
+
+            {error && (
+              <Notice tone="error" icon="alert-outline">
+                {error}
+              </Notice>
+            )}
+
+            <Text variant="titleMedium">Albo wklej tekst</Text>
+            <Field
+              multiline
+              mono
+              placeholder="MC1:CERT:…"
+              value={text}
+              onChangeText={setText}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <AppButton
+              variant="tonal"
+              onPress={() => void install(text)}
+              disabled={!text.trim() || busy}
+              loading={busy}
+            >
+              Zainstaluj z tekstu
+            </AppButton>
+          </>
+        )}
+      </ScrollView>
+
+      {/* Success → back; a failed attempt → scan again. While the camera is live there is nothing to press. */}
+      {installed ? (
+        <BottomActions>
+          <PrimaryButton icon="arrow-left" onPress={() => router.back()}>
+            Wróć
+          </PrimaryButton>
+        </BottomActions>
+      ) : (
+        !scanning && (
+          <BottomActions>
+            <PrimaryButton icon="qrcode-scan" onPress={scanAgain}>
+              Skanuj ponownie
+            </PrimaryButton>
+          </BottomActions>
+        )
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1 },
   content: { padding: 16, gap: 16 },
-  result: { flexDirection: 'row', gap: 12, padding: 16, borderRadius: radius.lg },
-  paste: { alignSelf: 'flex-start', borderRadius: radius.full },
 });

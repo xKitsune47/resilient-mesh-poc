@@ -1,20 +1,24 @@
-import { useEffect, useRef } from 'react';
+import { type ComponentProps, useEffect, useRef } from 'react';
 import { AppState, ScrollView, StyleSheet, ToastAndroid, View } from 'react-native';
-import { Button, Icon, Surface, Text, useTheme } from 'react-native-paper';
+import { Text } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { PrimaryButton } from '../components/PrimaryButton';
+import { AppButton, BottomActions, GroupCard, type IconName, IconTile, Notice, StatusDisc, Tag } from '../components/ui';
 import { openAppSettings, PERMISSIONS, PermissionState } from '../services/permissions/permissions';
 import { useIdentityStore } from '../store/identityStore';
 import { usePermissionStore } from '../store/permissionStore';
-import { radius, statusColors } from '../theme';
+import { useAppTheme } from '../theme';
 
-const STATE_UI: Record<PermissionState, { icon: string; color: string; label: string }> = {
-  granted: { icon: 'check-circle', color: statusColors.connected, label: 'Nadane' },
-  denied: { icon: 'close-circle-outline', color: statusColors.searching, label: 'Brak' },
-  blocked: { icon: 'block-helper', color: statusColors.error, label: 'Zablokowane' },
-  install_time: { icon: 'check-circle-outline', color: statusColors.connected, label: 'Przy instalacji' },
-  not_applicable: { icon: 'minus-circle-outline', color: statusColors.offline, label: 'Nie dotyczy' },
+const STATE_UI: Record<
+  PermissionState,
+  { status: ComponentProps<typeof StatusDisc>['status']; icon: IconName; label: string }
+> = {
+  granted: { status: 'connected', icon: 'check', label: 'Nadane' },
+  denied: { status: 'searching', icon: 'close', label: 'Brak' },
+  blocked: { status: 'error', icon: 'block-helper', label: 'Zablokowane' },
+  install_time: { status: 'connected', icon: 'check', label: 'Przy instalacji' },
+  not_applicable: { status: 'offline', icon: 'minus', label: 'Nie dotyczy' },
 };
 
 /**
@@ -23,7 +27,7 @@ const STATE_UI: Record<PermissionState, { icon: string; color: string; label: st
  * runtime permission is granted.
  */
 export default function PermissionsScreen() {
-  const theme = useTheme();
+  const theme = useAppTheme();
   const { snapshot, blocked, requesting, request, check } = usePermissionStore();
   const acknowledged = useIdentityStore((s) => s.permissionsAcknowledged);
   const setAcknowledged = useIdentityStore((s) => s.setPermissionsAcknowledged);
@@ -63,65 +67,58 @@ export default function PermissionsScreen() {
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.colors.background }]}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.hero}>
-          <Icon source="bluetooth-connect" size={64} color={theme.colors.primary} />
-          <Text variant="headlineLarge" style={styles.center}>
-            Uprawnienia
-          </Text>
-          <Text variant="bodyLarge" style={[styles.center, { color: theme.colors.onSurfaceVariant }]}>
+          <IconTile size={64} icon="bluetooth-connect" />
+          <Text variant="headlineLarge">Uprawnienia</Text>
+          <Text variant="bodyLarge" style={{ color: theme.colors.onSurfaceVariant }}>
             Mesh Chat łączy telefony przez Bluetooth, bez internetu. Aby działać, potrzebuje poniższych
             uprawnień systemowych.
           </Text>
         </View>
 
         {anyDenied && (
-          <Surface style={[styles.alert, { backgroundColor: theme.colors.errorContainer }]} elevation={0}>
-            <Icon source="alert" size={22} color={theme.colors.onErrorContainer} />
-            <Text variant="bodyMedium" style={{ color: theme.colors.onErrorContainer, flex: 1 }}>
-              {blocked
-                ? 'Część uprawnień została odrzucona na stałe. Otwórz ustawienia aplikacji, wejdź w „Uprawnienia” i zezwól na Bluetooth (urządzenia w pobliżu), lokalizację i powiadomienia.'
-                : 'Bez tych uprawnień aplikacja nie może wyszukiwać urządzeń ani przesyłać wiadomości. Nadaj je, aby kontynuować.'}
-            </Text>
-          </Surface>
+          <Notice tone="error" icon="alert-outline">
+            {blocked
+              ? 'Część uprawnień została odrzucona na stałe. Otwórz ustawienia aplikacji, wejdź w „Uprawnienia” i zezwól na Bluetooth (urządzenia w pobliżu), lokalizację i powiadomienia.'
+              : 'Bez tych uprawnień aplikacja nie może wyszukiwać urządzeń ani przesyłać wiadomości. Nadaj je, aby kontynuować.'}
+          </Notice>
         )}
 
-        <Surface style={styles.list} elevation={1}>
+        <GroupCard inset={56}>
           {PERMISSIONS.filter((p) => snapshot[p.name] !== 'not_applicable').map((p) => {
             const state = snapshot[p.name] ?? 'denied';
             const ui = STATE_UI[state];
             return (
               <View key={p.name} style={styles.item}>
-                <Icon source={ui.icon} size={22} color={ui.color} />
-                <View style={{ flex: 1 }}>
-                  <Text variant="titleSmall">{p.label}</Text>
-                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                <StatusDisc status={ui.status} icon={ui.icon} />
+                <View style={styles.itemText}>
+                  <Text variant="titleMedium">{p.label}</Text>
+                  <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
                     {p.reason}
                   </Text>
                 </View>
-                <Text variant="labelSmall" style={{ color: ui.color }}>
-                  {ui.label}
-                </Text>
+                <Tag label={ui.label} />
               </View>
             );
           })}
-        </Surface>
+        </GroupCard>
       </ScrollView>
 
-      <View style={styles.actions}>
+      <BottomActions safeArea={false}>
         {blocked ? (
           <>
             <PrimaryButton icon="cog-outline" onPress={openAppSettings}>
               Otwórz ustawienia systemowe
             </PrimaryButton>
-            <Button mode="text" onPress={ask} loading={requesting}>
+            <AppButton variant="text" onPress={ask} loading={requesting}>
               Spróbuj ponownie
-            </Button>
+            </AppButton>
           </>
         ) : (
           <PrimaryButton icon="shield-check-outline" onPress={ask} loading={requesting} disabled={requesting}>
             Nadaj uprawnienia
           </PrimaryButton>
         )}
-      </View>
+      </BottomActions>
     </SafeAreaView>
   );
 }
@@ -129,10 +126,7 @@ export default function PermissionsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   content: { padding: 16, gap: 16 },
-  hero: { alignItems: 'center', gap: 10, marginTop: 12, marginBottom: 4 },
-  center: { textAlign: 'center' },
-  alert: { flexDirection: 'row', gap: 12, padding: 16, borderRadius: radius.md, alignItems: 'flex-start' },
-  list: { borderRadius: radius.lg, paddingVertical: 4 },
-  item: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
-  actions: { padding: 16, gap: 8 },
+  hero: { alignItems: 'flex-start', gap: 12, marginTop: 24 },
+  item: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
+  itemText: { flex: 1 },
 });

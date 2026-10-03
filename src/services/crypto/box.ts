@@ -32,9 +32,23 @@ export interface MessagePlain {
 
 export interface AckPlain {
   y: 'a';
-  id: string; // acknowledged message id
+  id: string; // acknowledged message id (or verification token)
   from: string;
   to: string;
+}
+
+/** "I scanned the code on your screen": proves the sender saw the recipient's one-time token. */
+export interface VerifyPlain {
+  y: 'v';
+  id: string; // the token from the recipient's QR code
+  from: string;
+  to: string;
+}
+
+interface Envelopes {
+  m: MessagePlain;
+  a: AckPlain;
+  v: VerifyPlain;
 }
 
 export function sharedKey(peerBoxPublicKey: Uint8Array, myBoxSecretKey: Uint8Array): Uint8Array {
@@ -63,14 +77,14 @@ export function open(sealed: SealedPayload | null, shared: Uint8Array): unknown 
  * Checks that a decrypted payload is of the expected kind and really travels between the signed
  * packet origin and this node.
  */
-export function isEnvelope<K extends 'm' | 'a'>(
+export function isEnvelope<K extends keyof Envelopes>(
   plain: unknown,
   kind: K,
   origin: string,
   me: string
-): plain is K extends 'm' ? MessagePlain : AckPlain {
+): plain is Envelopes[K] {
   if (!plain || typeof plain !== 'object') return false;
   const p = plain as Record<string, unknown>;
   if (p.y !== kind || p.from !== origin || p.to !== me || typeof p.id !== 'string') return false;
-  return kind === 'a' || typeof p.t === 'string';
+  return kind !== 'm' || typeof p.t === 'string';
 }

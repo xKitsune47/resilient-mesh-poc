@@ -149,4 +149,23 @@ describe('packet v2', () => {
     expect(out).not.toBeNull();
     expect(accepts(out!)).toBe(true);
   });
+
+  it('never builds a frame longer than a GATT attribute value', () => {
+    // A characteristic value holds at most 512 bytes; Android 13+ refuses longer writes and
+    // notifications even though the usual MTU (517) has room for 514. 420 bytes of payload is a
+    // HELLO carrying an authority certificate – the smallest packet that needs two frames.
+    for (const size of [420, MAX_PAYLOAD_SIZE]) {
+      const raw = encodePacket(
+        packet({ destination: BROADCAST_ID, payload: nacl.randomBytes(size) }),
+        signerOf(alice)
+      );
+      const frames = fragment(raw, 7, 517);
+      expect(frames.length).toBeGreaterThan(1);
+      expect(Math.max(...frames.map((f) => f.length))).toBeLessThanOrEqual(512);
+      const reassembler = new Reassembler();
+      let out: Uint8Array | null = null;
+      for (const f of frames) out = reassembler.push(f) ?? out;
+      expect(out).toEqual(raw);
+    }
+  });
 });

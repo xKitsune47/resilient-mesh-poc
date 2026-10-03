@@ -1,32 +1,32 @@
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
-import { type ReactNode, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, ToastAndroid, View } from 'react-native';
-import {
-  Button,
-  Dialog,
-  HelperText,
-  List,
-  Portal,
-  SegmentedButtons,
-  Text,
-  TextInput,
-  useTheme,
-} from 'react-native-paper';
+import { Text } from 'react-native-paper';
 
-import { AlertBanner } from '../components/AlertBanner';
+import {
+  Card,
+  Field,
+  gridRows,
+  GroupCard,
+  ListRow,
+  SectionHeader,
+  SegmentedControl,
+  Sheet,
+  TabRoot,
+} from '../components/ui';
 import { fingerprint } from '../services/crypto/keys';
 import { openAppSettings } from '../services/permissions/permissions';
 import { MeshService } from '../services/mesh/MeshService';
 import { PROTOCOL_VERSION } from '../services/mesh/packet';
-import { type ThemePreference, useAppearanceStore } from '../store/appearanceStore';
+import { useAppearanceStore } from '../store/appearanceStore';
 import { NICK_MAX, selectIsAuthority, useIdentityStore, validateNick } from '../store/identityStore';
 import { useMeshStore } from '../store/meshStore';
-import { radius } from '../theme';
+import { useAppTheme } from '../theme';
 import { formatDate } from '../utils/time';
 
 export default function SettingsScreen() {
-  const theme = useTheme();
+  const theme = useAppTheme();
   const nodeId = useIdentityStore((s) => s.nodeId);
   const nick = useIdentityStore((s) => s.nick) ?? '';
   const authority = useIdentityStore((s) => s.authority);
@@ -58,235 +58,205 @@ export default function SettingsScreen() {
   };
 
   return (
-    <View style={[styles.screen, { backgroundColor: theme.colors.background }]}>
-      <AlertBanner />
-      <ScrollView contentContainerStyle={styles.content}>
-        <Section title="Profil">
-          <List.Item
+    <TabRoot title="Ustawienia">
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <SectionHeader first title="Profil" />
+        <GroupCard>
+          <ListRow
             title="Nick"
             description={nick}
-            left={(p) => <List.Icon {...p} icon="account-outline" />}
-            right={(p) => <List.Icon {...p} icon="pencil-outline" />}
+            icon="account-outline"
+            trailing="edit"
             onPress={() => {
               setDraft(nick);
               setEditNick(true);
             }}
           />
-          <List.Item
+          <ListRow
             title="Mój klucz"
-            description={fingerprint(nodeId)}
-            descriptionNumberOfLines={2}
-            descriptionStyle={{ fontFamily: 'monospace' }}
-            left={(p) => <List.Icon {...p} icon="qrcode" />}
-            right={(p) => <List.Icon {...p} icon="chevron-right" />}
+            description={gridRows(fingerprint(nodeId))}
+            descriptionMono
+            icon="qrcode"
             onPress={() => router.push('/my-key')}
           />
-        </Section>
+        </GroupCard>
 
-        <Section title="Bezpieczeństwo">
-          <List.Item
+        <SectionHeader title="Bezpieczeństwo" />
+        <GroupCard>
+          <ListRow
             title="Stan zabezpieczeń"
             description="Co chroni Twoje rozmowy, a czego aplikacja nie chroni"
-            descriptionNumberOfLines={2}
-            left={(p) => <List.Icon {...p} icon="shield-lock-outline" />}
-            right={(p) => <List.Icon {...p} icon="chevron-right" />}
+            icon="shield-lock-outline"
             onPress={() => router.push('/security')}
           />
-          <List.Item
+          <ListRow
             title="Komunikaty urzędowe"
             description="Aktywne i zakończone alerty"
-            left={(p) => <List.Icon {...p} icon="alert-octagon-outline" />}
-            right={(p) => <List.Icon {...p} icon="chevron-right" />}
+            icon="alert-octagon-outline"
             onPress={() => router.push('/alerts')}
           />
-        </Section>
+        </GroupCard>
 
-        <Section title="Konto urzędowe">
+        <SectionHeader title="Konto urzędowe" />
+        <GroupCard>
           {authority ? (
             <>
-              <List.Item
+              <ListRow
                 title={authority.name}
                 description={
                   isAuthority
                     ? `Certyfikat ważny do ${formatDate(authority.exp)}`
                     : `Certyfikat wygasł ${formatDate(authority.exp)} – poproś o nowy`
                 }
-                descriptionStyle={isAuthority ? undefined : { color: theme.colors.error }}
-                left={(p) => <List.Icon {...p} icon="shield-star-outline" />}
+                descriptionColor={isAuthority ? undefined : theme.colors.errorText}
+                icon="shield-star-outline"
               />
               {isAuthority && (
-                <List.Item
+                <ListRow
                   title="Nadaj alert"
                   description="Pilny komunikat do wszystkich w sieci"
-                  left={(p) => <List.Icon {...p} icon="bullhorn-outline" />}
-                  right={(p) => <List.Icon {...p} icon="chevron-right" />}
+                  icon="bullhorn-outline"
                   onPress={() => router.push('/compose-alert')}
                 />
               )}
-              <List.Item
+              <ListRow
                 title="Wczytaj nowy certyfikat"
-                left={(p) => <List.Icon {...p} icon="qrcode-scan" />}
+                icon="qrcode-scan"
                 onPress={() => router.push('/install-cert')}
               />
-              <List.Item
+              <ListRow
                 title="Usuń certyfikat"
-                titleStyle={{ color: theme.colors.error }}
-                left={(p) => <List.Icon {...p} color={theme.colors.error} icon="shield-off-outline" />}
+                tone="danger"
+                icon="shield-off-outline"
+                trailing="none"
                 onPress={() => setConfirmRemoveCert(true)}
               />
             </>
           ) : (
-            <List.Item
+            <ListRow
               title="Wczytaj certyfikat urzędowy"
               description="Dla upoważnionych pracowników urzędów. Certyfikat wydaje operator po sprawdzeniu tożsamości."
-              descriptionNumberOfLines={3}
-              left={(p) => <List.Icon {...p} icon="qrcode-scan" />}
-              right={(p) => <List.Icon {...p} icon="chevron-right" />}
+              descriptionLines={3}
+              icon="qrcode-scan"
               onPress={() => router.push('/install-cert')}
             />
           )}
-        </Section>
+        </GroupCard>
 
-        <Section title="Wygląd">
-          <View style={styles.padded}>
-            <SegmentedButtons
-              value={themePref}
-              onValueChange={(v) => setTheme(v as ThemePreference)}
-              buttons={[
-                { value: 'light', label: 'Jasny', icon: 'white-balance-sunny' },
-                { value: 'dark', label: 'Ciemny', icon: 'weather-night' },
-                { value: 'system', label: 'Systemowy', icon: 'theme-light-dark' },
-              ]}
-            />
-          </View>
-        </Section>
+        <SectionHeader title="Wygląd" />
+        <SegmentedControl
+          value={themePref}
+          onChange={setTheme}
+          options={[
+            { value: 'light', label: 'Jasny', icon: 'white-balance-sunny' },
+            { value: 'dark', label: 'Ciemny', icon: 'weather-night' },
+            { value: 'system', label: 'Systemowy', icon: 'theme-light-dark' },
+          ]}
+        />
 
-        <Section title="Dane">
-          <List.Item
+        <SectionHeader title="Dane" />
+        <GroupCard>
+          <ListRow
             title="Wyczyść historię"
             description="Usuwa wszystkie rozmowy i wiadomości z tego urządzenia"
-            titleStyle={{ color: theme.colors.error }}
-            left={(p) => <List.Icon {...p} color={theme.colors.error} icon="delete-sweep-outline" />}
+            tone="danger"
+            icon="delete-sweep-outline"
+            trailing="none"
             onPress={() => setConfirmClear(true)}
           />
-          <List.Item
+          <ListRow
             title="Uprawnienia systemowe"
             description="Otwórz ustawienia aplikacji w systemie"
-            left={(p) => <List.Icon {...p} icon="shield-key-outline" />}
+            icon="shield-key-outline"
+            trailing="external"
             onPress={openAppSettings}
           />
-        </Section>
+        </GroupCard>
 
-        <Section title="Sieć (diagnostyka)">
-          <View style={[styles.padded, styles.diag]}>
-            <Row label="Bluetooth" value={radio.bluetooth} />
-            <Row label="Tryb Peripheral" value={radio.peripheralSupported ? 'obsługiwany' : 'nieobsługiwany'} />
-            <Row label="Rozgłaszanie" value={radio.advertising ? 'aktywne' : 'nieaktywne'} />
-            <Row label="Pakiety odebrane" value={String(stats?.received ?? 0)} />
-            <Row label="Pakiety przekazane (relay)" value={String(stats?.relayed ?? 0)} />
-            <Row label="Duplikaty odrzucone" value={String(stats?.duplicates ?? 0)} />
-            <Row label="Odrzucone (limit/błąd)" value={String(stats?.dropped ?? 0)} />
-            <Row label="Sfałszowane pakiety" value={String(stats?.forged ?? 0)} />
-            <Row
-              label="Śr. czas weryfikacji podpisu"
-              value={stats?.verified ? `${(stats.verifyMs / stats.verified).toFixed(1)} ms` : '–'}
-            />
-          </View>
-        </Section>
+        <SectionHeader title="Sieć (diagnostyka)" />
+        <GroupCard inset={16}>
+          <Row label="Bluetooth" value={radio.bluetooth} />
+          <Row label="Tryb Peripheral" value={radio.peripheralSupported ? 'obsługiwany' : 'nieobsługiwany'} />
+          <Row label="Rozgłaszanie" value={radio.advertising ? 'aktywne' : 'nieaktywne'} />
+          <Row label="Pakiety odebrane" value={String(stats?.received ?? 0)} />
+          <Row label="Pakiety przekazane (relay)" value={String(stats?.relayed ?? 0)} />
+          <Row label="Duplikaty odrzucone" value={String(stats?.duplicates ?? 0)} />
+          <Row label="Odrzucone (limit/błąd)" value={String(stats?.dropped ?? 0)} />
+          <Row label="Sfałszowane pakiety" value={String(stats?.forged ?? 0)} />
+          <Row
+            label="Śr. czas weryfikacji podpisu"
+            value={stats?.verified ? `${(stats.verifyMs / stats.verified).toFixed(1)} ms` : '–'}
+          />
+        </GroupCard>
 
-        <Section title="O aplikacji">
-          <View style={[styles.padded, styles.about]}>
-            <Text variant="titleMedium">Mesh Chat {Constants.expoConfig?.version ?? ''}</Text>
-            <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-              Czat peer-to-peer przez Bluetooth Low Energy, bez internetu. Każdy telefon jest jednocześnie klientem
-              (Central) i serwerem (Peripheral), a wiadomości są przekazywane przez sąsiednie urządzenia
-              (flooding z TTL i deduplikacją oraz trasowanie wsteczne z ogłoszeń).
-            </Text>
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              Protokół mesh v{PROTOCOL_VERSION} · rozmowy są szyfrowane end-to-end, każdy pakiet jest podpisany.
-            </Text>
-          </View>
-        </Section>
+        <SectionHeader title="O aplikacji" />
+        <Card>
+          <Text variant="titleMedium">Mesh Chat {Constants.expoConfig?.version ?? ''}</Text>
+          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+            Czat peer-to-peer przez Bluetooth Low Energy, bez internetu. Każdy telefon jest jednocześnie klientem
+            (Central) i serwerem (Peripheral), a wiadomości są przekazywane przez sąsiednie urządzenia
+            (flooding z TTL i deduplikacją oraz trasowanie wsteczne z ogłoszeń).
+          </Text>
+          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+            Protokół mesh v{PROTOCOL_VERSION} · rozmowy są szyfrowane end-to-end, każdy pakiet jest podpisany.
+          </Text>
+        </Card>
       </ScrollView>
 
-      <Portal>
-        <Dialog visible={editNick} onDismiss={() => setEditNick(false)}>
-          <Dialog.Title>Zmień nick</Dialog.Title>
-          <Dialog.Content>
-            <TextInput mode="outlined" outlineStyle={{ borderRadius: radius.md }} value={draft} onChangeText={setDraft} maxLength={NICK_MAX} autoFocus />
-            <HelperText type="error" visible={!!nickError}>
-              {nickError}
-            </HelperText>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setEditNick(false)}>Anuluj</Button>
-            <Button onPress={saveNick} disabled={!!nickError}>
-              Zapisz
-            </Button>
-          </Dialog.Actions>
-        </Dialog>
-        <Dialog visible={confirmClear} onDismiss={() => setConfirmClear(false)}>
-          <Dialog.Title>Wyczyścić historię?</Dialog.Title>
-          <Dialog.Content>
-            <Text>Wszystkie rozmowy i wiadomości zostaną trwale usunięte z tego urządzenia.</Text>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setConfirmClear(false)}>Anuluj</Button>
-            <Button
-              textColor={theme.colors.error}
-              onPress={async () => {
-                await MeshService.clearHistory();
-                setConfirmClear(false);
-                ToastAndroid.show('Historia wyczyszczona', ToastAndroid.SHORT);
-              }}
-            >
-              Wyczyść
-            </Button>
-          </Dialog.Actions>
-        </Dialog>
-        <Dialog visible={confirmRemoveCert} onDismiss={() => setConfirmRemoveCert(false)}>
-          <Dialog.Title>Usunąć certyfikat?</Dialog.Title>
-          <Dialog.Content>
-            <Text>
-              To urządzenie przestanie być kontem urzędowym i nie będzie mogło nadawać alertów. Żeby to cofnąć,
-              trzeba ponownie wczytać certyfikat od operatora.
-            </Text>
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => setConfirmRemoveCert(false)}>Anuluj</Button>
-            <Button
-              textColor={theme.colors.error}
-              onPress={() => {
-                MeshService.removeCert();
-                setConfirmRemoveCert(false);
-              }}
-            >
-              Usuń
-            </Button>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
-    </View>
+      <Sheet
+        visible={editNick}
+        onDismiss={() => setEditNick(false)}
+        title="Zmień nick"
+        keyboard
+        primary={{ label: 'Zapisz', onPress: saveNick, disabled: !!nickError }}
+      >
+        <Field inset autoFocus value={draft} onChangeText={setDraft} maxLength={NICK_MAX} error={nickError} />
+      </Sheet>
+      <Sheet
+        visible={confirmClear}
+        onDismiss={() => setConfirmClear(false)}
+        title="Wyczyścić historię?"
+        primary={{
+          label: 'Wyczyść',
+          destructive: true,
+          onPress: async () => {
+            await MeshService.clearHistory();
+            setConfirmClear(false);
+            ToastAndroid.show('Historia wyczyszczona', ToastAndroid.SHORT);
+          },
+        }}
+      >
+        Wszystkie rozmowy i wiadomości zostaną trwale usunięte z tego urządzenia.
+      </Sheet>
+      <Sheet
+        visible={confirmRemoveCert}
+        onDismiss={() => setConfirmRemoveCert(false)}
+        title="Usunąć certyfikat?"
+        primary={{
+          label: 'Usuń',
+          destructive: true,
+          onPress: () => {
+            MeshService.removeCert();
+            setConfirmRemoveCert(false);
+          },
+        }}
+      >
+        To urządzenie przestanie być kontem urzędowym i nie będzie mogło nadawać alertów. Żeby to cofnąć,
+        trzeba ponownie wczytać certyfikat od operatora.
+      </Sheet>
+    </TabRoot>
   );
 }
 
-/** Section heading + one white card holding its rows. */
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  const theme = useTheme();
-  return (
-    <View style={styles.section}>
-      <Text variant="titleLarge">{title}</Text>
-      <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>{children}</View>
-    </View>
-  );
-}
-
+/** One line of the diagnostics card: what is measured on the left, its current value on the right. */
 function Row({ label, value }: { label: string; value: string }) {
-  const theme = useTheme();
+  const theme = useAppTheme();
   return (
     <View style={styles.row}>
-      <Text variant="bodyMedium">{label}</Text>
-      <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+      <Text variant="bodyMedium" style={[styles.rowLabel, { color: theme.colors.onSurfaceVariant }]}>
+        {label}
+      </Text>
+      <Text variant="bodyMedium" style={[styles.rowValue, { color: theme.colors.onSurface }]}>
         {value}
       </Text>
     </View>
@@ -294,12 +264,16 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
   content: { paddingHorizontal: 16, paddingBottom: 32 },
-  section: { marginTop: 24, gap: 12 },
-  card: { borderRadius: radius.lg, elevation: 1, overflow: 'hidden' },
-  padded: { padding: 16 },
-  diag: { gap: 8 },
-  row: { flexDirection: 'row', justifyContent: 'space-between' },
-  about: { gap: 8 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    minHeight: 44,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  rowLabel: { flexShrink: 1 },
+  rowValue: { fontVariant: ['tabular-nums'] },
 });

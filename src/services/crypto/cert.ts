@@ -21,11 +21,13 @@ import { nodeIdFromSignKey } from './keys';
 
 const CERT_DOMAIN = utf8Encode('meshchat-cert-v1');
 const CERT_RE = /^MC1:CERT:([A-Za-z0-9+/]{1,800}={0,2})\.([A-Za-z0-9+/]{86}==)$/;
-const ID_RE = /^MC1:ID:([A-Za-z0-9+/]{43}=)$/;
+const ID_RE = /^MC1:ID:([A-Za-z0-9+/]{43}=)(?::([A-Za-z0-9+/]{22}==))?$/;
 /** Control, bidi and zero-width characters – never allowed in a name shown as "official". */
 const UNSAFE_CHARS = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁠-⁩﻿]/;
 
 export const CERT_NAME_MAX = 48;
+/** Size of the one-time token in a verification offer. */
+export const VERIFY_TOKEN_BYTES = 16;
 
 export interface CertBody {
   v: 1;
@@ -151,15 +153,29 @@ export function verifyCert(
 
 // --- Identity QR ------------------------------------------------------------------------
 
-/** QR / text form of a public identity: just the signing key. Nicks are not part of it. */
-export function identityQr(signPublicKeyBase64: string): string {
-  return `MC1:ID:${signPublicKeyBase64}`;
+export interface ScannedIdentity {
+  nodeId: string;
+  /** One-time verification token shown on the owner's screen, if the code carried one. */
+  token: string | null;
 }
 
-/** Returns the node id encoded in an identity QR, or null for anything else (URLs, certs, junk). */
-export function nodeIdFromIdentityQr(text: unknown): string | null {
+/**
+ * QR / text form of a public identity: the signing key (nicks are not part of it). The code shown
+ * from a chat's verify screen also carries a one-time `token` (see mesh/verifyOffer). That form
+ * is meant for one person's camera only and is never shared as text: the token verifies nobody
+ * but the conversation it was opened for, yet anyone else presenting it cancels the verification.
+ */
+export function identityQr(signPublicKeyBase64: string, token?: string | null): string {
+  return token ? `MC1:ID:${signPublicKeyBase64}:${token}` : `MC1:ID:${signPublicKeyBase64}`;
+}
+
+/** Parses an identity QR. Returns null for anything else (URLs, certificates, junk). */
+export function parseIdentityQr(text: unknown): ScannedIdentity | null {
   if (typeof text !== 'string') return null;
   const m = ID_RE.exec(text);
   const key = m ? fromBase64Strict(m[1], nacl.sign.publicKeyLength) : null;
-  return key ? nodeIdFromSignKey(key) : null;
+  if (!key) return null;
+  const token = m![2] && fromBase64Strict(m![2], VERIFY_TOKEN_BYTES) ? m![2] : null;
+  if (m![2] && !token) return null;
+  return { nodeId: nodeIdFromSignKey(key), token };
 }
