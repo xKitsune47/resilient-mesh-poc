@@ -152,8 +152,8 @@ describe('packet v2', () => {
 
   it('never builds a frame longer than a GATT attribute value', () => {
     // A characteristic value holds at most 512 bytes; Android 13+ refuses longer writes and
-    // notifications even though the usual MTU (517) has room for 514. 420 bytes of payload is a
-    // HELLO carrying an authority certificate – the smallest packet that needs two frames.
+    // notifications even though the usual MTU (517) has room for 514. 420 bytes of payload is an
+    // ANNOUNCE carrying an authority certificate – the smallest packet that needs two frames.
     for (const size of [420, MAX_PAYLOAD_SIZE]) {
       const raw = encodePacket(
         packet({ destination: BROADCAST_ID, payload: nacl.randomBytes(size) }),

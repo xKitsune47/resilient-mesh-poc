@@ -17,6 +17,7 @@ interface Props {
 const STATUS_ICON: Record<ChatMessage['status'], { icon: string; label: string }> = {
   sending: { icon: 'clock-outline', label: 'Wysyłanie' },
   sent: { icon: 'check', label: 'Wysłana' },
+  waiting: { icon: 'timer-sand', label: 'Czeka na zasięg odbiorcy' },
   delivered: { icon: 'check-all', label: 'Dostarczona' },
   failed: { icon: 'alert-circle-outline', label: 'Nieudana – dotknij, aby ponowić' },
 };
@@ -31,6 +32,8 @@ function MessageBubbleImpl({ message, onRetry, tail = true, grouped = false }: P
   const mine = message.direction === 'out';
   const status = STATUS_ICON[message.status];
   const failed = mine && message.status === 'failed';
+  // Still on its way (it goes out by itself when the recipient is in range): a note, but no error border.
+  const waiting = mine && message.status === 'waiting';
   // Set only when the sender held a valid authority certificate – such messages are always urgent.
   const official = message.authority;
 
@@ -101,6 +104,11 @@ function MessageBubbleImpl({ message, onRetry, tail = true, grouped = false }: P
         {failed && (
           <Text variant="labelMedium" style={{ color: noteColor, marginTop: 2 }}>
             Nie dostarczono · dotknij, aby ponowić
+          </Text>
+        )}
+        {waiting && (
+          <Text variant="labelMedium" style={{ color: metaColor, marginTop: 2 }}>
+            {status.label}
           </Text>
         )}
       </Tappable>

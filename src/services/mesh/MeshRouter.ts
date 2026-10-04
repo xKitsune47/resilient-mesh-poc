@@ -46,10 +46,17 @@ export const FRESHNESS_MS = 10 * 60_000;
 export const CLOCK_SKEW_WARN_MS = 3 * 60_000;
 const HELLO_RETRY_MS = 3_000;
 const HANDSHAKE_TIMEOUT_MS = 15_000;
+/** How often an honest peer can ask for our HELLO reply again before its own handshake deadline. */
+const MAX_CERT_REPEATS = HANDSHAKE_TIMEOUT_MS / HELLO_RETRY_MS - 1;
 /** Forged packets tolerated from one neighbour before the link is dropped. */
 const MAX_STRIKES = 3;
 /** Minimum time between two alert re-syncs towards the same neighbour. */
 const ALERT_SYNC_COOLDOWN_MS = 60_000;
+/**
+ * An authority's certificate travels in every CERT_EVERY-th announce (and in the one that follows
+ * a new link). It makes the packet need a second BLE frame, and receivers remember it once seen.
+ */
+export const CERT_EVERY = 4;
 
 export interface MeshNode {
   nodeId: string;
@@ -68,7 +75,7 @@ export interface RouterIdentity {
   nick: string;
   /** Box public key (base64), announced for end-to-end encryption. */
   publicKey: string;
-  /** Authority certificate of this device, attached to HELLO / ANNOUNCE when present. */
+  /** Authority certificate of this device, attached to selected ANNOUNCE packets (see CERT_EVERY). */
   cert: string | null;
   signer: PacketSigner;
 }
@@ -116,6 +123,8 @@ interface Handshake {
   deadline: ReturnType<typeof setTimeout>;
   /** Peer clock minus ours, sampled from the HELLO that bound the link. */
   skewMs: number | null;
+  /** Certificate announces repeated for a peer that bound late (at most MAX_CERT_REPEATS per link). */
+  certRepeats: number;
 }
 
 /**
@@ -154,6 +163,8 @@ export class MeshRouter extends Emitter<RouterEvents> {
   private alertSyncAt = new Map<string, number>();
   /** Seeded from wall-clock seconds so it keeps increasing across app restarts. */
   private seq = Math.floor(Date.now() / 1000);
+  /** Announces handed to a neighbour since the last one with our certificate (Infinity = none yet). */
+  private announcesSinceCert = Infinity;
   private linkLimiter = new KeyedRateLimiter(60, 25); // raw packets per link
   private originLimiter = new KeyedRateLimiter(15, 1); // chat/ack packets per origin
   private announceLimiter = new KeyedRateLimiter(2, 0.2); // announces per origin
@@ -207,6 +218,8 @@ export class MeshRouter extends Emitter<RouterEvents> {
 
   setCert(cert: string | null) {
     this.identity.cert = cert;
+    // A new certificate must not wait for its turn: nobody has seen it yet.
+    this.announcesSinceCert = Infinity;
     void this.announce();
   }
 
@@ -268,11 +281,19 @@ export class MeshRouter extends Emitter<RouterEvents> {
     return results.filter(Boolean).length;
   }
 
-  announce() {
+  /** @param forceCert attach our certificate now (a neighbour that has not seen it is listening). */
+  announce(forceCert = false) {
     if (this.links.getLinks().length === 0) return Promise.resolve(0);
     const payload: AnnouncePayload = { n: this.identity.nick, k: this.identity.publicKey };
-    if (this.identity.cert) payload.c = this.identity.cert;
-    return this.originate(PacketType.Announce, BROADCAST_ID, encodeJson(payload));
+    // With the certificate an announce no longer fits one BLE frame, so most go without it.
+    const cert = this.identity.cert;
+    const withCert = !!cert && (forceCert || this.announcesSinceCert >= CERT_EVERY - 1);
+    if (withCert) payload.c = cert;
+    return this.originate(PacketType.Announce, BROADCAST_ID, encodeJson(payload)).then((n) => {
+      // Counted only when it left on a link: without an authenticated neighbour nobody saw it.
+      if (n > 0) this.announcesSinceCert = withCert ? 0 : this.announcesSinceCert + 1;
+      return n;
+    });
   }
 
   /**
@@ -459,6 +480,7 @@ export class MeshRouter extends Emitter<RouterEvents> {
         if (!handshake.state.peer) this.links.closeLink(link.id, 'handshake timeout');
       }, HANDSHAKE_TIMEOUT_MS),
       skewMs: null,
+      certRepeats: 0,
     };
     this.handshakes.set(link.id, handshake);
     this.sendHello(link, handshake);
@@ -466,8 +488,9 @@ export class MeshRouter extends Emitter<RouterEvents> {
 
   /** Tells the neighbour who we are. ttl=1 → never relayed. With `echo` it answers their challenge. */
   private sendHello(link: Link, handshake: Handshake, echo?: { challenge: string; peer: string }) {
+    // No certificate here: it would push every HELLO of an authority into a second BLE frame. It
+    // follows in the announce sent once the link is bound.
     const hello: HelloPayload = { n: this.identity.nick, k: this.identity.publicKey, ch: handshake.state.challenge };
-    if (this.identity.cert) hello.c = this.identity.cert;
     if (echo) {
       hello.re = echo.challenge;
       hello.ad = this.hooks.alerts.digest();
@@ -486,10 +509,21 @@ export class MeshRouter extends Emitter<RouterEvents> {
 
     const step = onHello(handshake.state, p.origin, hello, p.destination === this.identity.nodeId);
     if (step.reply) this.sendHello(link, handshake, { challenge: step.reply, peer: p.origin });
-    if (!step.bind) return;
+    if (!step.bind) {
+      // Asked again by a peer we have already bound: our reply was lost, so the peer has not bound
+      // us yet and refused the announce that followed our bind – the one with the certificate.
+      // Repeat it each time (this reply may get lost as well), but no more often per link than an
+      // honest peer asks, so that repeated HELLOs cannot force floods.
+      if (step.reply && handshake.state.peer && this.identity.cert && handshake.certRepeats < MAX_CERT_REPEATS) {
+        handshake.certRepeats++;
+        setTimeout(() => void this.announce(true), jitter(300, 900));
+      }
+      return;
+    }
 
     this.clearHandshakeTimers(handshake);
     const nick = sanitizeNick(hello.n);
+    // Older versions send their certificate in HELLO – still accepted.
     this.hooks.onPeerInfo(p.origin, { boxKey: hello.k, cert: hello.c, nick });
     if (!this.links.bindPeer(link.id, this.identity.nodeId, p.origin, nick)) return;
 
@@ -497,8 +531,9 @@ export class MeshRouter extends Emitter<RouterEvents> {
     this.emitClockSkew();
     this.learnRoute(p.origin, link, 1, p.seq, nick);
     if (typeof hello.ad === 'string' && hello.ad !== this.hooks.alerts.digest()) this.syncAlerts(link, p.origin);
-    // Flood a fresh announce so the rest of the mesh learns the new path quickly.
-    setTimeout(() => void this.announce(), jitter(300, 900));
+    // Flood a fresh announce so the rest of the mesh learns the new path quickly. It carries our
+    // certificate, which the new neighbour has had no chance to see yet.
+    setTimeout(() => void this.announce(true), jitter(300, 900));
   }
 
   /** Sends our stored alerts to a neighbour that has a different set (late joiner, merged islands). */

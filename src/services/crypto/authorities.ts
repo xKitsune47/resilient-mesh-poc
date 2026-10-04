@@ -2,8 +2,8 @@ import { type CertResult, checkCertValidity, readCert, type VerifiedCert } from 
 import { TRUST_ANCHORS } from './trustAnchors';
 
 /**
- * Certificate checks against the app's trust anchors, with a small cache: every HELLO, ANNOUNCE,
- * alert and message of an authority carries the same certificate, and checking the root
+ * Certificate checks against the app's trust anchors, with a small cache: every alert and message
+ * of an authority and every few of its ANNOUNCEs carry the same certificate, and checking the root
  * signature each time would cost an Ed25519 verification per packet.
  */
 

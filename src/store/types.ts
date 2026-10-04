@@ -1,4 +1,5 @@
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'failed';
+/** 'waiting': not acknowledged yet, kept on this device until the recipient shows up (see MeshService). */
+export type MessageStatus = 'sending' | 'sent' | 'waiting' | 'delivered' | 'failed';
 export type MessageDirection = 'in' | 'out';
 export type ConversationType = 'dm';
 

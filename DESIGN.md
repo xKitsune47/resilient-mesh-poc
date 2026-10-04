@@ -463,7 +463,8 @@ Baner alertu zwija się bez animacji.
   error stoi w dolnym pasie akcji i otwiera arkusz potwierdzenia.
 - **Message bubble (out):** primary-container, tekst on-primary-container.
   W stopce godzina + ikona statusu: zegar (wysyłanie), ptaszek (wysłana),
-  podwójny ptaszek w primary (dostarczona). Dymki są płaskie. W serii
+  klepsydra (czeka na zasięg odbiorcy), podwójny ptaszek w primary
+  (dostarczona). Dymki są płaskie. W serii
   wiadomości jednego nadawcy odstęp wynosi 2px, a ogonek ma tylko ostatni
   dymek; między seriami 8px.
 - **Message bubble (in):** biały. W stopce „N skoki · godzina", gdy wiadomość
@@ -471,6 +472,10 @@ Baner alertu zwija się bez animacji.
 - **Message bubble (official):** wiadomość od konta urzędowego. Obramowanie 1px
   w kolorze błędu, nad treścią ikona ośmiokąta + „PILNE · nazwa urzędu"
   (label-md). Nazwa pochodzi z certyfikatu, nigdy z nicku.
+- **Message bubble (waiting):** własna wiadomość, która czeka u nadawcy na
+  zasięg odbiorcy (do 24 h) i wyjdzie sama. Ikona klepsydry i podpis „Czeka na
+  zasięg odbiorcy" (label-md) w on-surface-variant. To nie błąd: bez
+  obramowania i bez akcji po dotknięciu.
 - **Message bubble (failed):** obramowanie 1px i ikona alertu w kolorze błędu,
   podpis „Nie dostarczono · dotknij, aby ponowić" (label-md,
   on-primary-container).

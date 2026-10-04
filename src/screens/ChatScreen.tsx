@@ -74,7 +74,7 @@ export default function ChatScreen() {
     ? node.hops <= 1
       ? 'W zasięgu · bezpośrednio'
       : `Osiągalny przez mesh · ${node.hops} skoki`
-    : 'Poza zasięgiem – wiadomość może nie dotrzeć';
+    : 'Poza zasięgiem – wiadomość poczeka do 24 h';
 
   const reversed = useMemo(() => [...messages].reverse(), [messages]);
 

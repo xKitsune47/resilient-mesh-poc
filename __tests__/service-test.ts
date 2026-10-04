@@ -4,6 +4,7 @@ import * as ca from '../scripts/authority-ca';
 import type { Link } from '../src/services/ble/LinkManager';
 import { identityQr, parseIdentityQr } from '../src/services/crypto/cert';
 import { deriveIdentity, type IdentityKeys } from '../src/services/crypto/keys';
+import type { MeshPacket } from '../src/services/mesh/packet';
 import type { ChatMessage, Conversation } from '../src/store/types';
 import { Emitter } from '../src/utils/Emitter';
 import { toBase64, toHex, utf8Decode } from '../src/utils/bytes';
@@ -111,7 +112,18 @@ function memoryChatRepository() {
       const m = messages.get(id);
       if (m) messages.set(id, { ...m, status, deliveredCount: deliveredCount ?? m.deliveredCount });
     },
-    failPendingMessages: async () => {},
+    listUnacknowledged: async (since: number) =>
+      [...messages.values()]
+        .filter((m) => m.direction === 'out' && m.timestamp >= since)
+        .filter((m) => m.status === 'sending' || m.status === 'sent' || m.status === 'waiting')
+        .sort((x, y) => x.timestamp - y.timestamp)
+        .map((m) => ({ ...m })),
+    failPendingMessages: async (before: number) => {
+      for (const m of messages.values()) {
+        const pending = m.status === 'sending' || m.status === 'sent' || m.status === 'waiting';
+        if (pending && m.timestamp < before) messages.set(m.id, { ...m, status: 'failed' });
+      }
+    },
     clearAll: async () => {
       conversations.clear();
       messages.clear();
@@ -306,6 +318,296 @@ describe('1:1 messages between two complete nodes', () => {
     for (const raw of wire) expect(utf8Decode(raw)).not.toContain('Zbiórka');
     // Nobody is verified just because they talked.
     expect(trust(bob, alice)).toBe('unverified');
+  });
+});
+
+describe('messages to a recipient who is out of range', () => {
+  /** Chat packets of `from` for `to`, as they arrive on the links of `at` – every transmission counts. */
+  function chatPacketsAt(at: TestNode, from: TestNode, to = at) {
+    const packets: MeshPacket[] = [];
+    at.links.on('packet', (_l, raw) => {
+      const p = at.packet.decodePacket(raw);
+      if (p?.type === at.packet.PacketType.Chat && p.origin === from.id && p.destination === to.id) packets.push(p);
+    });
+    return packets;
+  }
+  /** The two nodes walk out of each other's range. */
+  function disconnect(a: TestNode, b: TestNode) {
+    for (const [id, remote] of a.links.remotes) {
+      if (remote !== b.links) continue;
+      a.links.closeLink(id);
+      b.links.closeLink(id);
+    }
+  }
+  const statusesOn = (n: TestNode) => messagesOn(n).map((m) => m.status);
+
+  it('wait at the sender and are delivered exactly once when the recipient shows up', async () => {
+    const [alice, bob] = [await boot(1, 'Alicja'), await boot(3, 'Bob')];
+    const arrived = chatPacketsAt(bob, alice);
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Jestem cała, idę do babci');
+    await settle(40_000);
+    // The quick retries are over, but the message is not given up on.
+    expect(statusesOn(alice)).toEqual(['waiting']);
+
+    await settle(10 * 60_000);
+    expect(statusesOn(alice)).toEqual(['waiting']);
+    connect(alice, bob);
+    await settle(5_000);
+    expect(messagesOn(bob)).toMatchObject([{ text: 'Jestem cała, idę do babci', senderId: alice.id }]);
+    expect(statusesOn(alice)).toEqual(['delivered']);
+
+    // Acknowledged means done: the following cycles send nothing more.
+    await settle(3 * 60_000);
+    expect(arrived).toHaveLength(1);
+    // Re-sent as a flood: the route to somebody who has just come back may be stale.
+    expect(arrived[0].flags & alice.packet.PacketFlags.ForceFlood).toBeTruthy();
+  });
+
+  it('are sent again by the next cycle when a re-send got lost', async () => {
+    const [alice, relay, bob] = [await boot(1, 'Alicja'), await boot(2, 'Relay'), await boot(3, 'Bob')];
+    connect(alice, relay);
+    await settle(5_000);
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Spotkajmy się przy moście');
+    await settle(40_000);
+    expect(statusesOn(alice)).toEqual(['waiting']);
+
+    // Bob joins the mesh. The packet Alice sends on seeing him is lost on the air.
+    alice.links.drop = 1;
+    connect(relay, bob);
+    await settle(5_000);
+    expect(alice.links.drop).toBe(0);
+    expect(messagesOn(bob)).toHaveLength(0);
+    expect(statusesOn(alice)).toEqual(['waiting']);
+    // Bob is in the node list now: further traffic from the mesh triggers nothing, only the cycle does.
+    relay.service.setNick('Przekaźnik');
+    await settle(5_000);
+    expect(messagesOn(bob)).toHaveLength(0);
+
+    await settle(60_000);
+    expect(messagesOn(bob)).toMatchObject([{ text: 'Spotkajmy się przy moście' }]);
+    expect(statusesOn(alice)).toEqual(['delivered']);
+  });
+
+  it('are not transmitted while the recipient is not in the node list', async () => {
+    const [alice, relay, bob] = [await boot(1, 'Alicja'), await boot(2, 'Relay'), await boot(3, 'Bob')];
+    connect(alice, relay);
+    connect(relay, bob);
+    await settle(5_000);
+    // Bob walks away; two minutes later his route has expired on Alice's phone (she keeps his key).
+    disconnect(relay, bob);
+    await settle(2 * 60_000);
+
+    const onAir = chatPacketsAt(relay, alice, bob);
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Gdzie jesteś?');
+    await settle(40_000);
+    expect(statusesOn(alice)).toEqual(['waiting']);
+    expect(onAir).toHaveLength(4); // the quick series
+    await settle(5 * 60_000);
+    expect(onAir).toHaveLength(4);
+
+    connect(relay, bob);
+    await settle(5_000);
+    expect(onAir).toHaveLength(5);
+    expect(messagesOn(bob)).toMatchObject([{ text: 'Gdzie jesteś?' }]);
+    expect(statusesOn(alice)).toEqual(['delivered']);
+  });
+
+  it('are given up after 24 hours, and can still be sent again by hand', async () => {
+    const [alice, bob] = [await boot(1, 'Alicja'), await boot(3, 'Bob')];
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Wracam jutro');
+    await settle(24 * 3_600_000 - 60_000);
+    expect(statusesOn(alice)).toEqual(['waiting']);
+    await settle(3 * 60_000);
+    expect(statusesOn(alice)).toEqual(['failed']);
+
+    // Too late for the automatic delivery …
+    connect(alice, bob);
+    await settle(2 * 60_000);
+    expect(messagesOn(bob)).toHaveLength(0);
+    // … but a tap on the bubble still sends it – and with Bob gone again it waits anew.
+    disconnect(alice, bob);
+    await alice.service.resend(messagesOn(alice)[0].id);
+    await settle(40_000);
+    expect(statusesOn(alice)).toEqual(['waiting']);
+    connect(alice, bob);
+    await settle(5_000);
+    expect(messagesOn(bob)).toMatchObject([{ text: 'Wracam jutro' }]);
+    expect(statusesOn(alice)).toEqual(['delivered']);
+  });
+
+  it('survive a restart of the sender', async () => {
+    const [alice, bob] = [await boot(1, 'Alicja'), await boot(3, 'Bob')];
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Pierwsza');
+    await settle(40_000);
+    // The second one is still in its quick retries when the app goes away.
+    await alice.service.sendMessage(conversationId, 'Druga');
+    await settle(1_000);
+    expect(statusesOn(alice)).toEqual(['waiting', 'sending']);
+
+    await alice.service.stop();
+    await alice.service.start();
+    expect(statusesOn(alice)).toEqual(['waiting', 'waiting']);
+
+    await settle(60_000);
+    connect(alice, bob);
+    await settle(5_000);
+    expect(messagesOn(bob).map((m) => m.text)).toEqual(['Pierwsza', 'Druga']);
+    expect(statusesOn(alice)).toEqual(['delivered', 'delivered']);
+  });
+
+  it('count their 24 hours from the writing, also across a restart', async () => {
+    const [alice, bob] = [await boot(1, 'Alicja'), await boot(3, 'Bob')];
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Wczorajsza');
+    await settle(23 * 3_600_000);
+    await alice.service.stop();
+    await alice.service.start();
+    expect(statusesOn(alice)).toEqual(['waiting']);
+    await settle(61 * 60_000);
+    expect(statusesOn(alice)).toEqual(['failed']);
+  });
+
+  it('are given up on start when the app comes back more than 24 hours later', async () => {
+    const [alice, bob] = [await boot(1, 'Alicja'), await boot(3, 'Bob')];
+    connect(alice, bob);
+    await settle(5_000);
+    alice.links.drop = 1_000; // Bob is in range, but nothing of Alice's gets through to him
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Czekająca');
+    await settle(40_000);
+    await alice.service.sendMessage(conversationId, 'Oddana sąsiadowi');
+    await settle(1_000);
+    disconnect(alice, bob);
+    await alice.service.sendMessage(conversationId, 'W trakcie ponowień');
+    await settle(1_000);
+    expect(statusesOn(alice)).toEqual(['waiting', 'sent', 'sending']);
+
+    await alice.service.stop();
+    await settle(24 * 3_600_000);
+    await alice.service.start();
+    expect(statusesOn(alice)).toEqual(['failed', 'failed', 'failed']);
+  });
+
+  it('are no longer transmitted once their conversation is deleted', async () => {
+    const [alice, bob, carol] = [await boot(1, 'Alicja'), await boot(3, 'Bob'), await boot(4, 'Karol')];
+    const toBob = await alice.service.openDirectConversation(bob.id, 'Bob');
+    const toCarol = await alice.service.openDirectConversation(carol.id, 'Karol');
+    await alice.service.sendMessage(toBob, 'Do Boba');
+    await alice.service.sendMessage(toCarol, 'Do Karola');
+    await settle(40_000);
+    expect(statusesOn(alice)).toEqual(['waiting', 'waiting']);
+
+    await alice.service.deleteConversation(toBob);
+    const arrived = chatPacketsAt(bob, alice);
+    connect(alice, bob);
+    connect(alice, carol);
+    await settle(3 * 60_000);
+    expect(arrived).toHaveLength(0);
+    expect(messagesOn(bob)).toHaveLength(0);
+    // The other conversation is not affected.
+    expect(messagesOn(carol)).toMatchObject([{ text: 'Do Karola' }]);
+  });
+
+  it('are all delivered, oldest first, when twenty of them waited', async () => {
+    const [alice, bob] = [await boot(1, 'Alicja'), await boot(3, 'Bob')];
+    const arrived = chatPacketsAt(bob, alice);
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    const texts = Array.from({ length: 20 }, (_, i) => `Wiadomość ${i + 1}`);
+    for (const text of texts) {
+      expect(await alice.service.sendMessage(conversationId, text)).toEqual({ ok: true });
+      await settle(1_000); // the sender's own anti-flood limit
+    }
+    await settle(35_000);
+    expect(statusesOn(alice)).toEqual(texts.map(() => 'waiting'));
+
+    // Bob takes about one chat packet per second from one sender, so they go out paced – which
+    // takes long enough for a 60 s cycle to come round in the middle.
+    connect(alice, bob);
+    await settle(30_000);
+    expect(messagesOn(bob).map((m) => m.text)).toEqual(texts);
+    expect(statusesOn(alice)).toEqual(texts.map(() => 'delivered'));
+    // None was refused, none was transmitted a second time, and no two came closer than a second.
+    expect(arrived).toHaveLength(20);
+    const gaps = arrived.slice(1).map((p, i) => p.timestamp - arrived[i].timestamp);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it('go out without a pause when the recipient shows up while the app is in the background', async () => {
+    // The sender is booted last: appState() reaches the listener of the node that started last.
+    const [bob, alice] = [await boot(3, 'Bob'), await boot(1, 'Alicja')];
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    const texts = Array.from({ length: 5 }, (_, i) => `Wiadomość ${i + 1}`);
+    for (const text of texts) await alice.service.sendMessage(conversationId, text);
+    await settle(40_000);
+    expect(statusesOn(alice)).toEqual(texts.map(() => 'waiting'));
+
+    // React Native fires no JS timers in the background: a pause after the first message would never end.
+    alice.appState('background');
+    connect(alice, bob);
+    await settle(500);
+    expect(messagesOn(bob).map((m) => m.text)).toEqual(texts);
+    expect(statusesOn(alice)).toEqual(texts.map(() => 'delivered'));
+  });
+
+  it('reach a recipient who shows up while the messages for somebody else are going out', async () => {
+    const [alice, bob, carol] = [await boot(1, 'Alicja'), await boot(3, 'Bob'), await boot(4, 'Karol')];
+    const toCarol = await alice.service.openDirectConversation(carol.id, 'Karol');
+    const toBob = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(toCarol, 'Do Karola');
+    for (const text of ['Do Boba 1', 'Do Boba 2', 'Do Boba 3']) await alice.service.sendMessage(toBob, text);
+    await settle(40_000);
+
+    connect(alice, bob);
+    await settle(1_000);
+    // Bob's messages are still going out, one at a time – Karol does not have to wait for the next cycle.
+    connect(alice, carol);
+    await settle(5_000);
+    expect(messagesOn(carol)).toMatchObject([{ text: 'Do Karola' }]);
+    expect(messagesOn(bob).map((m) => m.text)).toEqual(['Do Boba 1', 'Do Boba 2', 'Do Boba 3']);
+    expect(statusesOn(alice)).toEqual(['delivered', 'delivered', 'delivered', 'delivered']);
+  });
+
+  it('keep the time they were written, which a message sent right away does not carry', async () => {
+    const [alice, bob] = [await boot(1, 'Alicja'), await boot(3, 'Bob')];
+    const arrived = chatPacketsAt(bob, alice);
+    const plainOf = (p: MeshPacket) =>
+      bob.e2e.openJson(alice.id, bob.packet.decodeJson(p.payload)) as Record<string, unknown>;
+    const conversationId = await alice.service.openDirectConversation(bob.id, 'Bob');
+    await alice.service.sendMessage(conversationId, 'Napisana rano');
+    const writtenAt = messagesOn(alice)[0].timestamp;
+    await settle(10 * 60_000);
+    connect(alice, bob);
+    await settle(5_000);
+    // The packet is stamped when it is sent; the time of writing travels inside the ciphertext.
+    expect(arrived[0].timestamp).toBeGreaterThan(writtenAt + 9 * 60_000);
+    expect(plainOf(arrived[0]).s).toBe(writtenAt);
+    expect(messagesOn(bob)[0].timestamp).toBe(writtenAt);
+    // The conversation list goes by the arrival: what has just come in belongs on top.
+    expect(bob.chats.getState().conversations[0].lastMessageAt).toBe(arrived[0].timestamp);
+
+    await alice.service.sendMessage(conversationId, 'Wysłana od razu');
+    await settle();
+    expect(Object.keys(plainOf(arrived[1]))).toEqual(['y', 'id', 'n', 't', 'from', 'to']);
+    expect(messagesOn(bob)[1].timestamp).toBe(arrived[1].timestamp);
+
+    // A claimed time is believed only within the waiting limit, and never as later than the packet.
+    type Originate = (type: number, destination: string, payload: Uint8Array) => Promise<number>;
+    const router = (alice.service as unknown as { router: { originate: Originate } }).router;
+    const sentAt = Date.now();
+    const claims = [sentAt + 30_000, sentAt - 26 * 3_600_000, sentAt - 1_000.5, String(writtenAt)];
+    const believed = sentAt - 24 * 3_600_000; // a message that waited the whole day
+    for (const [i, s] of [...claims, believed].entries()) {
+      const plain = { y: 'm', id: `claim-${i}`, n: 'Alicja', t: 'Zegar', from: alice.id, to: bob.id, s };
+      const forged = alice.packet.encodeJson(alice.e2e.sealJson(bob.id, plain));
+      await router.originate(alice.packet.PacketType.Chat, bob.id, forged);
+    }
+    await settle();
+    expect(messagesOn(bob).slice(2).map((m) => m.timestamp)).toEqual([...claims.map(() => sentAt), believed]);
   });
 });
 
@@ -625,6 +927,20 @@ describe('authority accounts', () => {
     await expect(office.service.cancelAlert(alert.id)).resolves.toEqual({ ok: true });
     await settle();
     expect(citizen.alerts.getState().alerts).toMatchObject([{ id: alert.id, cancelled: true }]);
+  });
+
+  it('are recognised from their announces alone, and stay recognised between two certificates', async () => {
+    const [office, relay, citizen] = [await boot(10, 'dyzurny'), await boot(2, 'Relay'), await boot(3, 'Ola')];
+    await office.service.installCert(certify(office, 'Urząd Miasta – WZK'));
+    connect(office, relay);
+    connect(relay, citizen);
+    await settle(5_000);
+    // No alert and no message yet: the certificate came with the announce that follows the handshake.
+    for (const n of [relay, citizen]) expect(trust(n, office)).toBe('official');
+
+    // The announces of the next 90 s carry no certificate – that must not take the badge away.
+    await settle(90_000);
+    for (const n of [relay, citizen]) expect(trust(n, office)).toBe('official');
   });
 
   it('cannot be claimed without a certificate for this very device', async () => {

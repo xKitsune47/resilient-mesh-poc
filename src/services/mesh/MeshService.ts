@@ -13,6 +13,7 @@ import { toBase64 } from '../../utils/bytes';
 import { createLogger } from '../../utils/logger';
 import { sanitizeLine, sanitizeNick } from '../../utils/nick';
 import { randomBytes, randomId } from '../../utils/random';
+import { sleep } from '../../utils/time';
 import { Link, LinkManager } from '../ble/LinkManager';
 import { peerAuthority } from '../crypto/authorities';
 import { AckPlain, isEnvelope, MessagePlain, SealedPayload, VerifyPlain } from '../crypto/box';
@@ -45,6 +46,20 @@ const ANNOUNCE_FOREGROUND_MS = 30_000;
 const ANNOUNCE_BACKGROUND_MS = 60_000;
 /** Retry schedule for messages without an ACK. */
 const RETRY_DELAYS_MS = [4_000, 10_000, 20_000];
+/** After the retries an undelivered message waits on this device, this long, for its recipient to show up. */
+const WAIT_LIMIT_MS = 24 * 3_600_000;
+/** Waiting messages are offered again this often while their recipient is in the node list. */
+const WAIT_FLUSH_INTERVAL_MS = 60_000;
+/**
+ * Pause between two re-sent messages: past a burst of 15, receivers take one packet per second (chats
+ * and acks together) from one origin. Two phones flushing to each other exceed that after about 17
+ * messages; the acks lost then are made up for by the next cycle.
+ */
+const WAIT_FLUSH_GAP_MS = 1_200;
+/** A message transmitted later than this after it was written carries the time of writing. */
+const WRITTEN_AT_AFTER_MS = 60_000;
+/** How long before its packet a message may claim to have been written (WAIT_LIMIT_MS plus slack). */
+const MAX_WRITTEN_AGE_MS = 25 * 3_600_000;
 /** Clock skew tolerance for incoming timestamps. */
 const MAX_FUTURE_SKEW_MS = 60_000;
 const ALERT_PRUNE_INTERVAL_MS = 10 * 60_000;
@@ -57,6 +72,8 @@ interface Outgoing {
   attempt: number;
   transmitted: boolean;
   timer: ReturnType<typeof setTimeout> | null;
+  /** When the message is given up on (see WAIT_LIMIT_MS). */
+  deadline: number;
 }
 
 /** A verification proof on its way to the peer whose code was scanned. */
@@ -83,7 +100,9 @@ export type ScanResult =
  *  - Messages are 1:1, directed, end-to-end encrypted packets; the recipient answers with an
  *    encrypted ACK → "delivered". There is no group chat: nobody can broadcast content except
  *    certified authority accounts (alerts).
- *  - Unacknowledged messages are retried with ForceFlood (a route may be stale), then marked failed.
+ *  - Unacknowledged messages are retried with ForceFlood (a route may be stale). After that they
+ *    wait on this device – never on other phones – for up to 24 h and go out again when the
+ *    recipient shows up in the node list; after those 24 h they are marked failed.
  *  - Message ids are UUIDs; SQLite INSERT OR IGNORE makes delivery idempotent end to end.
  *  - Alerts are signed public notices; this layer stores them, the router spreads them.
  */
@@ -98,6 +117,11 @@ class MeshServiceImpl {
   private appStateSub: { remove(): void } | null = null;
   private notificationTimer: ReturnType<typeof setTimeout> | null = null;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
+  private waitTimer: ReturnType<typeof setInterval> | null = null;
+  private flushing = false;
+  private background = false;
+  /** Node ids of the last 'nodesChanged' – a recipient counts as arriving only if it was not in here. */
+  private listedNodes = new Set<string>();
   private started = false;
   private starting: Promise<void> | null = null;
 
@@ -119,8 +143,10 @@ class MeshServiceImpl {
 
     // Everything that can fail (opening the encrypted database) happens before the mesh counts
     // as started, so a failed start can simply be retried.
-    await chatRepository.failPendingMessages();
+    const waitingSince = Date.now() - WAIT_LIMIT_MS;
+    await chatRepository.failPendingMessages(waitingSince);
     await useChatStore.getState().loadConversations();
+    await this.restoreWaiting(waitingSince);
     await useContactsStore.getState().load();
     for (const c of Object.values(useContactsStore.getState().contacts)) rememberPeerKey(c.nodeId, c.boxKey);
     this.setAlerts(pruneAlerts(await alertRepository.list(), Date.now()), false);
@@ -146,6 +172,7 @@ class MeshServiceImpl {
       const pruned = pruneAlerts(alerts, Date.now());
       if (pruned !== alerts) this.setAlerts(pruned);
     }, ALERT_PRUNE_INTERVAL_MS);
+    this.waitTimer = setInterval(() => void this.flushWaiting(), WAIT_FLUSH_INTERVAL_MS);
 
     // Foreground service keeps the process (JS engine + BLE) alive in the background.
     try {
@@ -164,6 +191,8 @@ class MeshServiceImpl {
     this.unsubs.forEach((u) => u());
     this.unsubs = [];
     if (this.pruneTimer) clearInterval(this.pruneTimer);
+    if (this.waitTimer) clearInterval(this.waitTimer);
+    this.listedNodes.clear();
     this.outgoing.forEach((o) => o.timer && clearTimeout(o.timer));
     this.outgoing.clear();
     this.proofs.forEach((p) => {
@@ -210,6 +239,7 @@ class MeshServiceImpl {
         mesh.set({ nodes });
         this.scheduleNotificationUpdate();
         this.refreshDmTitles(nodes);
+        this.noteArrivals(nodes);
       }),
       router.on('clockSkew', (clockSkewMs) => mesh.set({ clockSkewMs })),
       router.on('deliver', (packet, link) => {
@@ -251,7 +281,14 @@ class MeshServiceImpl {
     useChatStore.getState().addMessage(message);
     await this.touchConversation(conversation, message, false);
 
-    this.outgoing.set(message.id, { message, conversation, attempt: 0, transmitted: false, timer: null });
+    this.outgoing.set(message.id, {
+      message,
+      conversation,
+      attempt: 0,
+      transmitted: false,
+      timer: null,
+      deadline: message.timestamp + WAIT_LIMIT_MS,
+    });
     void this.transmit(message.id);
     return { ok: true };
   }
@@ -269,6 +306,9 @@ class MeshServiceImpl {
       attempt: 0,
       transmitted: false,
       timer: null,
+      // Asked for again by the user: it gets the full waiting time once more – in memory only; after
+      // an app restart a message written more than WAIT_LIMIT_MS ago is failed again (see doStart).
+      deadline: Date.now() + WAIT_LIMIT_MS,
     });
     void this.transmit(message.id);
   }
@@ -282,6 +322,12 @@ class MeshServiceImpl {
   }
 
   async deleteConversation(id: string) {
+    // Nothing of a deleted conversation may go out later – neither a retry nor a waiting message.
+    for (const [messageId, out] of this.outgoing) {
+      if (out.conversation.id !== id) continue;
+      if (out.timer) clearTimeout(out.timer);
+      this.outgoing.delete(messageId);
+    }
     await chatRepository.deleteConversation(id);
     useChatStore.getState().removeConversation(id);
   }
@@ -585,10 +631,13 @@ class MeshServiceImpl {
   // Transmission, ACKs and retries
   // --------------------------------------------------------------------------------------
 
-  private async transmit(messageId: string) {
-    const out = this.outgoing.get(messageId);
+  /**
+   * Encrypts one chat message and hands it to the router.
+   * @returns number of links it left on (0 = not transmitted at all).
+   */
+  private async sendChat(out: Outgoing, flags: number): Promise<number> {
     const router = this.router;
-    if (!out || !router) return;
+    if (!router) return 0;
     const { message, conversation } = out;
     const destination = conversation.peerId!;
     const identity = useIdentityStore.getState();
@@ -601,19 +650,26 @@ class MeshServiceImpl {
       from: identity.nodeId,
       to: destination,
     };
+    // The packet is stamped when it is sent, so a message that waited says itself when it was written.
+    if (Date.now() - message.timestamp > WRITTEN_AT_AFTER_MS) plain.s = message.timestamp;
     // Messages never leave the device in the clear. No key yet (peer's announce not seen) → retry later.
     const sealed = sealJson(destination, plain);
     // An authority attaches its certificate so the recipient can verify it from this packet alone.
     if (sealed && identity.cert && selectIsAuthority(identity)) sealed.a = identity.cert;
-    // First attempt trusts the route table; retries flood in case the route went stale.
-    const flags = out.attempt > 0 ? PacketFlags.ForceFlood : 0;
 
-    let sentOn = 0;
     try {
-      if (sealed) sentOn = await router.originate(PacketType.Chat, destination, encodeJson(sealed), { flags });
+      if (sealed) return await router.originate(PacketType.Chat, destination, encodeJson(sealed), { flags });
     } catch (e) {
       log.warn('originate failed', e);
     }
+    return 0;
+  }
+
+  private async transmit(messageId: string) {
+    const out = this.outgoing.get(messageId);
+    if (!out || !this.router) return;
+    // First attempt trusts the route table; retries flood in case the route went stale.
+    const sentOn = await this.sendChat(out, out.attempt > 0 ? PacketFlags.ForceFlood : 0);
     if (!this.outgoing.has(messageId)) return; // acknowledged or cleared meanwhile
 
     if (sentOn > 0 && !out.transmitted) {
@@ -623,14 +679,94 @@ class MeshServiceImpl {
     if (!this.outgoing.has(messageId)) return;
 
     if (out.attempt >= RETRY_DELAYS_MS.length) {
-      await this.setStatus(out.message, 'failed');
-      this.outgoing.delete(messageId);
+      // Not given up on: the entry stays without a timer, so a late ACK still counts, and
+      // flushWaiting() sends the message again once its recipient is in the node list.
+      out.timer = null;
+      if (!(await this.expire(out))) await this.setStatus(out.message, 'waiting');
       return;
     }
     out.timer = setTimeout(() => {
       out.attempt++;
       void this.transmit(messageId);
     }, RETRY_DELAYS_MS[out.attempt]);
+  }
+
+  /** Gives up on a message whose waiting time is over. Returns true if it did. */
+  private async expire(out: Outgoing): Promise<boolean> {
+    if (Date.now() < out.deadline) return false;
+    this.outgoing.delete(out.message.id);
+    await this.setStatus(out.message, 'failed');
+    return true;
+  }
+
+  /**
+   * Sends the waiting messages whose recipient is in the node list once more, oldest first, and
+   * gives up on those that waited too long. Nothing goes out for a recipient that is not listed:
+   * flooding the mesh for somebody who is not there only costs airtime.
+   */
+  private async flushWaiting() {
+    if (this.flushing) return;
+    this.flushing = true;
+    try {
+      const done = new Set<Outgoing>();
+      for (;;) {
+        // Chosen anew for every packet: messages get acknowledged or deleted, and further
+        // recipients arrive, while a flush is under way.
+        const now = Date.now();
+        const [out] = [...this.outgoing.values()]
+          .filter((o) => o.message.status === 'waiting' && !done.has(o))
+          .filter((o) => now >= o.deadline || this.router?.getNode(o.conversation.peerId!))
+          .sort((a, b) => a.message.timestamp - b.message.timestamp);
+        if (!out) return;
+        done.add(out);
+        if (await this.expire(out)) continue;
+        // Flooded like a retry: the route to a node that has just come back may be stale. The status
+        // stays 'waiting' until the ACK – a lost packet is simply sent again by the next flush.
+        const sentOn = await this.sendChat(out, PacketFlags.ForceFlood);
+        // No pause in the background: React Native fires no JS timers there, so it would never end.
+        // The receivers' burst of 15 per origin covers the unpaced flush; what exceeds it stays 'waiting'.
+        if (sentOn > 0 && !this.background) await sleep(WAIT_FLUSH_GAP_MS);
+      }
+    } finally {
+      this.flushing = false;
+    }
+  }
+
+  /**
+   * Starts a flush as soon as the recipient of a waiting message comes into range. 'nodesChanged'
+   * fires on almost every received packet, hence the comparison with the previous list.
+   */
+  private noteArrivals(nodes: { nodeId: string }[]) {
+    const previous = this.listedNodes;
+    this.listedNodes = new Set(nodes.map((n) => n.nodeId));
+    for (const out of this.outgoing.values()) {
+      const peerId = out.conversation.peerId!;
+      if (out.message.status === 'waiting' && this.listedNodes.has(peerId) && !previous.has(peerId)) {
+        void this.flushWaiting();
+        return;
+      }
+    }
+  }
+
+  /**
+   * After an app restart: own messages that nobody acknowledged and that are not too old wait for
+   * their recipient again (whatever was pending in memory – retries, a late ACK – is gone).
+   */
+  private async restoreWaiting(since: number) {
+    const { conversations } = useChatStore.getState();
+    for (const message of await chatRepository.listUnacknowledged(since)) {
+      const conversation = conversations.find((c) => c.id === message.conversationId);
+      if (!conversation) continue;
+      if (message.status !== 'waiting') await this.setStatus(message, 'waiting');
+      this.outgoing.set(message.id, {
+        message,
+        conversation,
+        attempt: 0,
+        transmitted: false,
+        timer: null,
+        deadline: message.timestamp + WAIT_LIMIT_MS,
+      });
+    }
   }
 
   private async onAck(packet: MeshPacket) {
@@ -698,13 +834,21 @@ class MeshServiceImpl {
     });
     this.rememberContact(packet.origin, senderNick);
 
+    // A message that waited at the sender names the time it was written. That is the sender's own
+    // claim: believed only as far back as a message may wait, and never as later than the packet.
+    const { s } = chat;
+    const writtenAt =
+      s !== undefined && Number.isSafeInteger(s) && s <= packet.timestamp && packet.timestamp - s <= MAX_WRITTEN_AGE_MS
+        ? s
+        : packet.timestamp;
+
     const message: ChatMessage = {
       id: chat.id,
       conversationId: conversation.id,
       senderId: packet.origin,
       senderNick,
       text,
-      timestamp: Math.min(packet.timestamp, Date.now() + MAX_FUTURE_SKEW_MS),
+      timestamp: Math.min(writtenAt, Date.now() + MAX_FUTURE_SKEW_MS),
       status: 'delivered',
       direction: 'in',
       deliveredCount: 0,
@@ -716,7 +860,9 @@ class MeshServiceImpl {
     if (isNew) {
       useChatStore.getState().addMessage(message);
       const active = useChatStore.getState().activeConversationId === conversation.id;
-      await this.touchConversation(conversation, message, !active);
+      // The list is ordered by when a message arrived, not by when a waited one was written.
+      const arrivedAt = Math.min(packet.timestamp, Date.now() + MAX_FUTURE_SKEW_MS);
+      await this.touchConversation(conversation, { ...message, timestamp: arrivedAt }, !active);
     }
 
     // Always ACK – even duplicates: our previous ACK may have been lost, causing the retry.
@@ -791,6 +937,7 @@ class MeshServiceImpl {
 
   private onAppState = (state: AppStateStatus) => {
     const background = state !== 'active';
+    this.background = background;
     // A code is only good while its owner is looking at it – not after switching to another app.
     if (background) this.closeVerificationOffer();
     this.links.setBackground(background);

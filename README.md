@@ -193,7 +193,7 @@ Typy pakietów:
 | Typ | TTL | Opis |
 |---|---|---|
 | `HELLO` | 1 | handshake z wyzwaniem na nowym łączu, nigdy nie jest przekazywany |
-| `ANNOUNCE` | 5 | co 30 s (w tle co 60 s) i po każdym nowym łączu; buduje tablicę tras i listę węzłów |
+| `ANNOUNCE` | 5 | co 30 s (w tle co 60 s) i po każdym nowym łączu; buduje tablicę tras i listę węzłów; konto urzędowe dołącza certyfikat po nowym łączu i do co czwartego |
 | `CHAT` | 7 | wiadomość 1:1, kierowana, szyfrowana end-to-end |
 | `ACK` | 7 | potwierdzenie doręczenia, kierowane do autora, szyfrowane |
 | `ALERT` | 1 | komunikat konta urzędowego; rozchodzi się „od magazynu do magazynu” (patrz niżej) |
@@ -202,10 +202,13 @@ Typy pakietów:
 
 - Wiadomość ma **UUID** (klucz idempotencji), **ID nadawcy** i **timestamp**. `INSERT OR IGNORE`
   w SQLite eliminuje duplikaty, nawet gdy ta sama wiadomość przyjdzie kilkoma ścieżkami.
-- Statusy: `sending` (wysyłanie), **wysłana** (przekazana ≥1 sąsiadowi), **dostarczona**
-  (przyszedł ACK), **nieudana**.
-  Bez ACK następują ponowienia po 4, 10 i 20 s z `ForceFlood` (trasa mogła się zdezaktualizować),
-  a potem status „nieudana”. Dotknięcie dymka ponawia wysyłkę.
+- Statusy: `sending` (wysyłanie), **wysłana** (przekazana ≥1 sąsiadowi), **czeka** (na zasięg odbiorcy),
+  **dostarczona** (przyszedł ACK), **nieudana**.
+  Bez ACK następują ponowienia po 4, 10 i 20 s z `ForceFlood` (trasa mogła się zdezaktualizować).
+  Potem wiadomość **czeka na telefonie nadawcy do 24 h** – także po restarcie aplikacji – i wychodzi sama,
+  gdy odbiorca pojawi się na liście węzłów (oraz co 60 s, dopóki na niej jest); spóźniony ACK nadal się
+  liczy. Wysłana z opóźnieniem niesie w szyfrogramie czas napisania. Po 24 h status „nieudana”; dotknięcie
+  takiego dymka ponawia wysyłkę.
 - Odbiorca **zawsze** odsyła ACK, także na duplikat (poprzedni ACK mógł zaginąć). ACK jest szyfrowany
   tak jak wiadomość i liczy się tylko wtedy, gdy przyszedł od rozmówcy.
 - **Każda rozmowa jest szyfrowana end-to-end** (NaCl box: X25519 + XSalsa20-Poly1305,
@@ -328,7 +331,9 @@ Poza modelem: zagłuszanie radiowe, przejęty system Android (root, malware), pr
    Telefon przyjmie certyfikat tylko wtedy, gdy podpisał go klucz główny i gdy dotyczy on klucza tego
    właśnie telefonu.
 5. Każdy alert i każda wiadomość urzędnika niesie certyfikat, więc odbiorca sprawdza wszystko
-   z jednego pakietu, bez internetu.
+   z jednego pakietu, bez internetu. Do `ANNOUNCE` urzędnik dołącza certyfikat tylko po zestawieniu
+   łącza i co czwarty raz (z certyfikatem pakiet nie mieści się w jednej ramce BLE), a do `HELLO` wcale –
+   odbiorca zapamiętuje certyfikat raz zobaczony.
 
 Podrobienie konta urzędowego wymagałoby klucza głównego (offline, pod hasłem) albo telefonu urzędnika
 razem z jego odciskiem palca lub kodem blokady. Sam certyfikat jest publiczny – skopiowany z eteru nic
@@ -352,6 +357,9 @@ Urząd **nie ma** wglądu w prywatne rozmowy: nie istnieje depozyt kluczy ani up
 - **Złośliwy przekaźnik może gubić i opóźniać pakiety** oraz zaniżać ich zasięg (obniżając `ttl`); nie
   może ich czytać, zmieniać ani podrabiać. Handshake nie wyklucza węzła, który przezroczyście przekazuje
   ruch między dwoma telefonami – „bezpośredni sąsiad” to wskazówka dla routingu, nie dowód.
+- Węzeł, który dołączył do sieci przez przekaźnik, może do 2 min (do 4 min, gdy aplikacja urzędu działa
+  w tle) widzieć konto urzędowe jako zwykły węzeł – do najbliższego `ANNOUNCE` z certyfikatem. Alerty
+  i wiadomości urzędu niosą certyfikat zawsze.
 - **Zegar**: pakiety z czasem różniącym się o ponad 10 minut są odrzucane. Aplikacja porównuje zegar
   z sąsiadami i ostrzega, ale nie potrafi go poprawić.
 - Klucze w trakcie pracy są w pamięci aplikacji; SecureStore i SQLCipher chronią dane w spoczynku.
@@ -360,7 +368,8 @@ Urząd **nie ma** wglądu w prywatne rozmowy: nie istnieje depozyt kluczy ani up
   Sieć (diagnostyka) pokazują średni czas weryfikacji – jeśli przekracza ok. 10 ms, trzeba dodać budżet
   weryfikacji na łącze albo natywną implementację Ed25519.
 - Brak powiadomień systemowych o alertach, gdy aplikacja jest w tle.
-- Brak store-and-forward dla wiadomości 1:1 do odbiorców offline dłużej niż okno ponowień (~35 s).
+- Brak store-and-forward dla wiadomości 1:1: niedostarczona wiadomość czeka tylko na telefonie nadawcy
+  (do 24 h), inne telefony jej nie przechowują – dotrze, gdy nadawca i odbiorca znajdą się w jednej sieci.
 - Protokół v2 nie jest zgodny z v1: po aktualizacji urządzenie dostaje nowe ID, a stara,
   niezaszyfrowana baza jest usuwana.
 - Po ubiciu procesu przez system (np. agresywne oszczędzanie baterii producenta) mesh się zatrzymuje.

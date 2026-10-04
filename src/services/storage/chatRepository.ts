@@ -144,10 +144,25 @@ export const chatRepository = {
     }
   },
 
-  /** Messages still "sending" after an app restart can never complete – mark them failed. */
-  async failPendingMessages(): Promise<void> {
+  /** Own messages written at `since` or later that nobody acknowledged yet, oldest first. */
+  async listUnacknowledged(since: number): Promise<ChatMessage[]> {
     const db = await getDb();
-    await db.runAsync(`UPDATE messages SET status = 'failed' WHERE status = 'sending'`);
+    const rows = await db.getAllAsync<MessageRow>(
+      `SELECT * FROM messages
+       WHERE direction = 'out' AND status IN ('sending', 'sent', 'waiting') AND timestamp >= ?
+       ORDER BY timestamp ASC`,
+      since
+    );
+    return rows.map(toMessage);
+  },
+
+  /** Messages written before `before` are too old to be sent again after an app restart – mark them failed. */
+  async failPendingMessages(before: number): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE messages SET status = 'failed' WHERE status IN ('sending', 'sent', 'waiting') AND timestamp < ?`,
+      before
+    );
   },
 
   async clearAll(): Promise<void> {

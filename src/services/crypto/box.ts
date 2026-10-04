@@ -28,6 +28,8 @@ export interface MessagePlain {
   t: string; // text
   from: string;
   to: string;
+  /** Time of writing (ms) – only in a message that left the sender well after it was written. */
+  s?: number;
 }
 
 export interface AckPlain {

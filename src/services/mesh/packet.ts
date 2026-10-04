@@ -96,7 +96,7 @@ export interface HelloPayload {
   re?: string;
   /** Digest of the sender's alert set (only in replies) – a mismatch triggers a re-sync. */
   ad?: string;
-  /** Authority certificate of the sender. */
+  /** Authority certificate of the sender. No longer sent (see ANNOUNCE), still accepted from older versions. */
   c?: string;
 }
 
